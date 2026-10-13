@@ -1,0 +1,13 @@
+{
+  "name": "shtorka",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Шторка сверху экрана: задачи, нагрузка ПК, обои, ярлыки, питание и чат с Gemini",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}
