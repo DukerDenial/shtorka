@@ -2,13 +2,26 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Права главного окна шторки",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "dialog:default",
+    "core:webview:allow-set-webview-zoom",
     {
       "identifier": "http:default",
-      "allow": [{ "url": "https://generativelanguage.googleapis.com/*" }]
+      "allow": [
+        {
+          "url": "https://generativelanguage.googleapis.com/*"
+        },
+        {
+          "url": "https://api.open-meteo.com/*"
+        },
+        {
+          "url": "https://geocoding-api.open-meteo.com/*"
+        }
+      ]
     }
   ]
 }

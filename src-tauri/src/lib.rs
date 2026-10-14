@@ -252,42 +252,112 @@ async fn set_wallpaper(path: String) -> Result<(), String> {
 
 // ───────────────────────── запуск и питание ─────────────────────────
 
-/// Настоящий значок программы или ярлыка (PNG в base64) — тот же, что показывает Проводник
-#[tauri::command]
-async fn app_icon(path: String) -> Result<Option<String>, String> {
-    blocking(move || {
-        const PS: &str = r#"
+/// Значки сразу для нескольких программ или ярлыков (PNG в base64), один запуск PowerShell на пачку
+fn icons_for(paths: &[String]) -> Vec<Option<String>> {
+    const PS: &str = r#"
 Add-Type -AssemblyName System.Drawing
-$p = $env:SH_PATH
-try {
-  if ($p -like '*.lnk') {
-    $t = (New-Object -ComObject WScript.Shell).CreateShortcut($p)
-    if ($t.IconLocation -and $t.IconLocation -notlike ',*') {
-      $loc = $t.IconLocation.Split(',')[0]
-      if (Test-Path -LiteralPath $loc) { $p2 = $loc }
+$ws = New-Object -ComObject WScript.Shell
+foreach ($p in ($env:SH_PATHS -split '\|')) {
+  $res = ''
+  try {
+    $q = $p
+    if ($p -like '*.lnk') {
+      $t = $ws.CreateShortcut($p)
+      $p2 = $null
+      if ($t.IconLocation -and $t.IconLocation -notlike ',*') {
+        $loc = $t.IconLocation.Split(',')[0]
+        if ($loc -and (Test-Path -LiteralPath $loc)) { $p2 = $loc }
+      }
+      if (-not $p2 -and $t.TargetPath -and (Test-Path -LiteralPath $t.TargetPath)) { $p2 = $t.TargetPath }
+      if ($p2) { $q = $p2 }
     }
-    if (-not $p2 -and $t.TargetPath -and (Test-Path -LiteralPath $t.TargetPath)) { $p2 = $t.TargetPath }
-    if ($p2) { $p = $p2 }
-  }
-  $ic = [System.Drawing.Icon]::ExtractAssociatedIcon($p)
-  $bmp = New-Object System.Drawing.Bitmap 64, 64
-  $g = [System.Drawing.Graphics]::FromImage($bmp)
-  $g.InterpolationMode = 'HighQualityBicubic'
-  $g.DrawImage($ic.ToBitmap(), 0, 0, 64, 64)
-  $ms = New-Object System.IO.MemoryStream
-  $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
-  [Convert]::ToBase64String($ms.ToArray())
-} catch { }
+    $ic = [System.Drawing.Icon]::ExtractAssociatedIcon($q)
+    $bmp = New-Object System.Drawing.Bitmap 48, 48
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $g.InterpolationMode = 'HighQualityBicubic'
+    $g.DrawImage($ic.ToBitmap(), 0, 0, 48, 48)
+    $ms = New-Object System.IO.MemoryStream
+    $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+    $res = [Convert]::ToBase64String($ms.ToArray())
+  } catch { }
+  Write-Output $res
+}
 "#;
-        let out = quiet(
-            Command::new("powershell.exe")
-                .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", PS])
-                .env("SH_PATH", &path),
-        )
-        .output();
-        let Ok(out) = out else { return Ok(None) };
-        let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        Ok(if text.len() > 40 { Some(format!("data:image/png;base64,{text}")) } else { None })
+    let joined = paths.join("|");
+    let out = quiet(
+        Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", PS])
+            .env("SH_PATHS", joined),
+    )
+    .output();
+    let text = match out {
+        Ok(o) => String::from_utf8_lossy(&o.stdout).to_string(),
+        Err(_) => String::new(),
+    };
+    let mut lines = text.lines();
+    paths
+        .iter()
+        .map(|_| {
+            let l = lines.next().unwrap_or("").trim();
+            if l.len() > 40 { Some(format!("data:image/png;base64,{l}")) } else { None }
+        })
+        .collect()
+}
+
+/// Настоящие значки для списка программ (порядок сохраняется, где значка нет — null)
+#[tauri::command]
+async fn app_icons(paths: Vec<String>) -> Result<Vec<Option<String>>, String> {
+    if paths.is_empty() {
+        return Ok(vec![]);
+    }
+    blocking(move || Ok(icons_for(&paths))).await
+}
+
+#[derive(Serialize)]
+struct StartApp {
+    name: String,
+    path: String,
+}
+
+fn walk_lnk(dir: &PathBuf, depth: u32, out: &mut Vec<StartApp>) {
+    let Ok(rd) = fs::read_dir(dir) else { return };
+    for e in rd.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            if depth < 4 {
+                walk_lnk(&p, depth + 1, out);
+            }
+            continue;
+        }
+        if p.extension().and_then(|x| x.to_str()).map(|x| x.eq_ignore_ascii_case("lnk")) != Some(true) {
+            continue;
+        }
+        let name = p.file_stem().and_then(|x| x.to_str()).unwrap_or("").to_string();
+        let low = name.to_lowercase();
+        const SKIP: [&str; 10] = [
+            "uninstall", "удал", "readme", "справк", "help", "documentation", "license", "лицензи", "website", "веб-сайт",
+        ];
+        if name.is_empty() || SKIP.iter().any(|w| low.contains(w)) {
+            continue;
+        }
+        out.push(StartApp { name, path: p.to_string_lossy().to_string() });
+    }
+}
+
+/// Установленные программы: ярлыки из меню «Пуск» (общие и пользовательские)
+#[tauri::command]
+async fn list_start_apps() -> Result<Vec<StartApp>, String> {
+    blocking(|| {
+        let mut out = Vec::new();
+        for var in ["ProgramData", "APPDATA"] {
+            if let Ok(base) = std::env::var(var) {
+                let dir = PathBuf::from(base).join("Microsoft").join("Windows").join("Start Menu").join("Programs");
+                walk_lnk(&dir, 0, &mut out);
+            }
+        }
+        out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        out.dedup_by(|a, b| a.name.to_lowercase() == b.name.to_lowercase());
+        Ok(out)
     })
     .await
 }
@@ -440,7 +510,8 @@ pub fn run() {
             list_bundled_wallpapers,
             set_wallpaper,
             open_target,
-            app_icon,
+            app_icons,
+            list_start_apps,
             power_action,
             get_volume,
             set_volume,

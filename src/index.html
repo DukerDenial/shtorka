@@ -33,6 +33,7 @@
       <nav id="tabs">
         <i id="tab-ind"></i>
         <button data-tab="control" class="on">Управление</button>
+        <button data-tab="today">Сегодня</button>
         <button data-tab="chat">Gemini</button>
         <button data-tab="notes">Заметки</button>
         <button data-tab="stats">Нагрузка</button>
@@ -130,6 +131,54 @@
               <button id="proxy-test" class="ghost">Проверить</button>
             </div>
             <div id="proxy-note" class="hint">Нужен, если Gemini пишет «недоступен в вашем регионе». Используется только для чата с Gemini.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Сегодня -->
+      <section id="tab-today" class="tab">
+        <div class="td">
+          <div class="tile td-date">
+            <div class="td-big"><b id="td-day">1</b><div><span id="td-month"></span><small id="td-wd"></small></div></div>
+            <button id="td-wx" class="td-wx" title="Сменить город">
+              <span class="wx-ic" id="wx-ic"></span>
+              <span class="wx-t"><b id="wx-temp">–</b><small id="wx-desc">Погода загружается…</small></span>
+              <span class="wx-c" id="wx-city"></span>
+            </button>
+            <form id="td-cityform" class="td-cityform" hidden>
+              <input id="td-city" type="text" placeholder="Город" autocomplete="off" spellcheck="false">
+              <button class="round" type="submit" title="Найти"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12l5 5 9-10"/></svg></button>
+            </form>
+          </div>
+
+          <div class="tile td-cal">
+            <div class="td-cal-h">
+              <button id="cal-prev" class="round" title="Назад"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 6l-6 6 6 6"/></svg></button>
+              <b id="cal-title"></b>
+              <button id="cal-next" class="round" title="Вперёд"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10 6l6 6-6 6"/></svg></button>
+            </div>
+            <div class="cal-wd"><span>Пн</span><span>Вт</span><span>Ср</span><span>Чт</span><span>Пт</span><span>Сб</span><span>Вс</span></div>
+            <div id="cal-grid" class="cal-grid"></div>
+          </div>
+
+          <div class="tile td-timer">
+            <div class="seg" id="tm-mode"><button data-m="sw" class="on">Секундомер</button><button data-m="tm">Таймер</button></div>
+            <div class="tm-ring">
+              <svg viewBox="0 0 120 120"><circle class="tr-bg" cx="60" cy="60" r="52"/><circle id="tm-arc" class="tr-fg" cx="60" cy="60" r="52"/></svg>
+              <div class="tm-time"><b id="tm-main">00:00</b><small id="tm-sub">.00</small></div>
+            </div>
+            <div id="tm-presets" class="tm-presets" hidden>
+              <button data-min="1">1</button><button data-min="5">5</button><button data-min="10">10</button><button data-min="25">25</button><span>мин</span>
+            </div>
+            <div class="tm-btns">
+              <button id="tm-go" class="glass acc">Старт</button>
+              <button id="tm-reset" class="glass">Сброс</button>
+            </div>
+          </div>
+
+          <div class="tile td-notes">
+            <div class="card-h"><span>Заметки</span><button id="td-allnotes" class="link">Все</button></div>
+            <div id="td-notelist" class="td-nl"></div>
           </div>
         </div>
       </section>
@@ -275,11 +324,12 @@
 
       <!-- Приложения -->
       <section id="tab-apps" class="tab">
-        <div class="row">
-          <button id="app-add" class="primary">Добавить программу или ярлык</button>
-          <span class="hint">Правый клик по плитке — убрать</span>
+        <div class="ap-bar">
+          <div class="n-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg><input id="ap-search" type="text" placeholder="Поиск приложений…" autocomplete="off" spellcheck="false"></div>
+          <span id="ap-count" class="chip"></span>
+          <button id="app-add" class="round" title="Добавить программу или ярлык"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
         </div>
-        <div id="app-grid" class="app-grid"></div>
+        <div id="ap-list" class="ap-list"></div>
       </section>
 
       <!-- Питание -->

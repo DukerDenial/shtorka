@@ -32,13 +32,13 @@
 
   /* Размеры окна: [ширина, высота]. Ширина 0 = на весь экран.
      compact — тонкая полоска ~0,5 см (19 логических px). Должна совпадать с lib.rs */
-  const SIZES = { normal: [940, 590], wide: [0, 640] };
+  const SIZES = { normal: [1040, 590], wide: [0, 640] };
 
   const state = {
     open: false,
     pinned: false,
     wide: store.get('wide', false),
-    tab: ['control', 'chat', 'notes', 'stats', 'wallpaper', 'apps', 'power'].includes(store.get('tab', 'control')) ? store.get('tab', 'control') : 'control',
+    tab: ['control', 'today', 'chat', 'notes', 'stats', 'wallpaper', 'apps', 'power'].includes(store.get('tab', 'control')) ? store.get('tab', 'control') : 'control',
     busy: 0,          // >0 — открыт диалог, сворачиваться нельзя
     hover: false,
     cooldown: 0,
@@ -82,30 +82,31 @@
      «Питание» — низкая, «Приложения» растут вместе с числом ярлыков, остальные — на полную высоту.
      Окно всегда подгоняется под шторку, чтобы пустая часть не перехватывала клики. */
   let winH = 0, fitT;
+  let ZOOM = 0.86;                       // всё интерфейс чуть мельче и аккуратнее
+  async function initZoom() {
+    try { await T.webview.getCurrentWebview().setZoom(ZOOM); } catch { ZOOM = 1; }
+  }
   const maxH = () => (state.wide ? SIZES.wide[1] : SIZES.normal[1]);
   function naturalH() {
     const hd = $('header').offsetHeight;
     if (state.tab === 'power') return hd + 12 + $(".power-grid").offsetHeight + 30;
-    if (state.tab === 'apps') {
-      const grid = $('#app-grid'), last = grid.lastElementChild;
-      const gh = last ? last.offsetTop - grid.offsetTop + last.offsetHeight : 0;
-      return hd + 12 + $('#tab-apps .row').offsetHeight + 12 + gh + 26;
-    }
     return maxH();
   }
   async function fitShell() {
     const h = Math.round(Math.min(Math.max(naturalH(), 230), maxH()));
-    const need = h + 8;
-    const width = state.wide ? SIZES.wide[0] : SIZES.normal[0];
+    const need = h + 8;               // в px интерфейса
+    const winPx = Math.round(need * ZOOM);
+    const w0 = state.wide ? SIZES.wide[0] : SIZES.normal[0];
+    const width = w0 > 0 ? Math.round(w0 * ZOOM) : 0;
     clearTimeout(fitT);
     if (need > winH) {
       winH = need;
-      await safe('resize_shutter', { width, height: need });
+      await safe('resize_shutter', { width, height: winPx });
       shell.style.setProperty('--h', h + 'px');
     } else {
       shell.style.setProperty('--h', h + 'px');
       fitT = setTimeout(() => {          // окно сжимаем после анимации
-        if (winH !== need) { winH = need; safe('resize_shutter', { width, height: need }); }
+        if (winH !== need) { winH = need; safe('resize_shutter', { width, height: winPx }); }
       }, 800);
     }
   }
@@ -128,11 +129,10 @@
     return !!a && (a.tagName === 'TEXTAREA' || a.tagName === 'INPUT');
   }
 
-  function maybeCollapseLater(ms = 450) {
+  function maybeCollapseLater(ms = 40) {
     clearTimeout(leaveT);
     leaveT = setTimeout(() => {
       if (state.hover || state.pinned || state.busy > 0) return;
-      if (textFocused() && document.hasFocus()) return;
       collapse();
     }, ms);
   }
@@ -152,7 +152,8 @@
     if (state.open) maybeCollapseLater();
   });
   shell.addEventListener('click', () => { if (!state.open) expand(); });
-  window.addEventListener('blur', () => { if (state.open) maybeCollapseLater(250); });
+  window.addEventListener('blur', () => { if (state.open) maybeCollapseLater(120); });
+  document.documentElement.addEventListener('mouseleave', () => { state.hover = false; if (state.open) maybeCollapseLater(0); });
 
   // Курсор над видимой частью шторки? (по области clip-path; нужно, когда браузер не прислал mouseenter)
   document.addEventListener('mousemove', (e) => {
@@ -227,6 +228,8 @@
     setTimeout(() => {
       if (state.tab !== name) return;
       if (name === 'wallpaper') loadWallpapers(false);
+      if (name === 'today') onTodayShown();
+      if (name === 'apps') { renderApps(true); refreshStartApps(); }
       if (name === 'control') refreshControls();
       if (name === 'chat') $('#chat-input').focus();
       if (name === 'stats') pollNow();
@@ -323,6 +326,7 @@
   let chatId = chats.length ? chats[0].id : null;
   let chat = chats.length ? chats[0].msgs : [];   // сообщения открытого чата
   let chatAbort = null;
+  let genArr = null;   // чат, в котором сейчас идёт ответ
   const saveChats = () => store.set('chats', chats.slice(0, 40).map((c) => ({ ...c, msgs: c.msgs.slice(-80) })));
 
   function mdInline(s) {
@@ -374,14 +378,13 @@
       return;
     }
     msgsEl.innerHTML = chat
-      .map((m, i) => `<div class="msg ${m.role === 'user' ? 'user' : m.role === 'err' ? 'err' : ''}" data-i="${i}">${md(m.text)}</div>`)
+      .map((m, i) => `<div class="msg ${m.role === 'user' ? 'user' : m.role === 'err' ? 'err' : ''}${genArr === chat && i === chat.length - 1 && m.role === 'model' ? ' typing' : ''}" data-i="${i}">${md(m.text)}</div>`)
       .join('');
     scrollDown();
     renderChatList();
   }
 
   function selectChat(id) {
-    if (chatAbort) return;           // пока идёт ответ, чат не переключаем
     const c = chats.find((x) => x.id === id);
     if (!c) return;
     chatId = id;
@@ -390,7 +393,6 @@
   }
 
   function newChat() {
-    if (chatAbort) return;
     const empty = chats.find((c) => !c.msgs.length);
     if (empty) { selectChat(empty.id); }
     else {
@@ -478,16 +480,18 @@
     cur.ts = Date.now();
     chats = [cur, ...chats.filter((c) => c !== cur)];   // свежий чат — наверх списка
 
-    chat.push({ role: 'user', text });
-    chat.push({ role: 'model', text: '' });
+    const arr = cur.msgs;
+    const isHere = () => chatId === cur.id;
+    arr.push({ role: 'user', text });
+    arr.push({ role: 'model', text: '' });
+    genArr = arr;
     input.value = '';
     autoGrow();
     renderChat();
-    const botEl = msgsEl.lastElementChild;
-    botEl.classList.add('typing');
+    const botEl = { set innerHTML(h) { const e = isHere() ? msgsEl.lastElementChild : null; if (e) e.innerHTML = h; } };
     setSending(true);
 
-    const history = chat
+    const history = arr
       .slice(0, -1)
       .filter((m) => m.role === 'user' || m.role === 'model')
       .slice(-24)
@@ -505,10 +509,10 @@
     };
     const partsOf = (obj) => (obj.candidates && obj.candidates[0] && obj.candidates[0].content && obj.candidates[0].content.parts) || [];
     const show = (got) => {
-      const stick = nearBottom();
-      chat[chat.length - 1].text = got;
+      const stick = isHere() && nearBottom();
+      arr[arr.length - 1].text = got;
       botEl.innerHTML = md(got);
-      if (stick) scrollDown();
+      if (stick && isHere()) scrollDown();
     };
 
     /** Потоковый ответ: слова появляются по мере генерации */
@@ -517,9 +521,16 @@
       if (!res.ok) throw Object.assign(new Error(parseApiError(res.status, await res.text())), { status: res.status });
       const reader = res.body.getReader();
       const dec = new TextDecoder();
-      let buf = '', got = '', blocked = '', first = true;
+      let buf = '', got = '', blocked = '', first = true, finished = false;
       for (;;) {
-        const { value, done } = await withTimeout(reader.read(), first ? WAIT.first : WAIT.chunk);
+        let r;
+        try { r = await withTimeout(reader.read(), first ? WAIT.first : WAIT.chunk); }
+        catch (e) {
+          // ответ уже получен, а соединение «зависло» (бывает через прокси) — считаем его законченным
+          if (e && e.message === 'TIMEOUT' && got) { try { reader.cancel(); } catch { /* ок */ } break; }
+          throw e;
+        }
+        const { value, done } = r;
         first = false;
         if (done) break;
         buf += dec.decode(value, { stream: true });
@@ -534,8 +545,10 @@
           try { obj = JSON.parse(payload); } catch { continue; }
           if (obj.promptFeedback && obj.promptFeedback.blockReason) blocked = obj.promptFeedback.blockReason;
           for (const p of partsOf(obj)) if (p.text) { got += p.text; show(got); }
+          if (obj.candidates && obj.candidates[0] && obj.candidates[0].finishReason) finished = true;
         }
         if (abortSignal.aborted) break;
+        if (finished) { try { reader.cancel(); } catch { /* ок */ } break; }
       }
       if (!got && !abortSignal.aborted) throw new Error(blocked ? `Запрос заблокирован Gemini (${blocked}).` : 'Gemini вернул пустой ответ.');
       return got;
@@ -563,7 +576,7 @@
     const attempt = async () => {
       try { return await viaStream(); }
       catch (e) {
-        if (e && e.message === 'TIMEOUT' && !chat[chat.length - 1].text && !abortSignal.aborted) return viaPlain();
+        if (e && e.message === 'TIMEOUT' && !arr[arr.length - 1].text && !abortSignal.aborted) return viaPlain();
         throw e;
       }
     };
@@ -576,7 +589,7 @@
           try { got = await attempt(); lastErr = null; }
           catch (e) {
             lastErr = e;
-            if (!busy(e) || abortSignal.aborted || chat[chat.length - 1].text) throw e;
+            if (!busy(e) || abortSignal.aborted || arr[arr.length - 1].text) throw e;
             botEl.innerHTML = '<span class="note">Gemini перегружен, пробую ещё раз…</span>';
             await pause(tryN === 0 && qi === 0 ? 1200 : 300);
           }
@@ -584,19 +597,20 @@
       }
       if (lastErr) throw lastErr;
     } catch (e) {
-      const partial = chat[chat.length - 1].text;
+      const partial = arr[arr.length - 1].text;
       if (e && e.name === 'AbortError') {
-        if (!partial) chat.pop();
+        if (!partial) arr.pop();
       } else if (partial) {
-        chat.push({ role: 'err', text: humanizeError(e) });
+        arr.push({ role: 'err', text: humanizeError(e) });
       } else {
-        chat[chat.length - 1] = { role: 'err', text: humanizeError(e) };
+        arr[arr.length - 1] = { role: 'err', text: humanizeError(e) };
       }
     } finally {
       chatAbort = null;
+      genArr = null;
       setSending(false);
       saveChats();
-      renderChat();
+      if (isHere()) renderChat(); else renderChatList();
     }
     return got;
   }
@@ -630,9 +644,9 @@
     const row = e.target.closest('.c-row');
     if (!row) return;
     if (e.target.closest('.c-del')) {
-      if (chatAbort) return;
       const c = chats.find((x) => x.id === row.dataset.id);
       if (!c || !(await confirmDialog(`Удалить чат «${c.title}»?`, 'Удалить'))) return;
+      if (chatAbort && genArr === c.msgs) chatAbort.abort();
       chats = chats.filter((x) => x !== c);
       if (chatId === c.id) {
         chatId = chats.length ? chats[0].id : null;
@@ -965,7 +979,7 @@
   function tickClock() {
     const now = new Date();
     $('#hdr-time').textContent = now.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-    $('#hdr-date').textContent = now.toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric', month: 'long' });
+    $('#hdr-date').textContent = now.toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric', month: 'short' }).replace('.', '');
   }
 
   /* ───────────────────────── обои: карусель ───────────────────────── */
@@ -1411,68 +1425,353 @@
     if (th !== null) paintTheme(!!th);
   }
 
+  /* ───────────────────────── сегодня ───────────────────────── */
+
+  const MONTHS = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
+  const MONTHS_G = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+  const WEEKDAYS = ['воскресенье', 'понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота'];
+  let calView = new Date();
+
+  function renderToday() {
+    const now = new Date();
+    $('#td-day').textContent = now.getDate();
+    $('#td-month').textContent = MONTHS_G[now.getMonth()];
+    $('#td-wd').textContent = WEEKDAYS[now.getDay()];
+  }
+
+  function renderCal() {
+    const y = calView.getFullYear(), m = calView.getMonth();
+    $('#cal-title').textContent = `${MONTHS[m]} ${y}`;
+    const first = (new Date(y, m, 1).getDay() + 6) % 7;      // понедельник = 0
+    const days = new Date(y, m + 1, 0).getDate();
+    const prevDays = new Date(y, m, 0).getDate();
+    const t = new Date();
+    const cells = [];
+    for (let i = 0; i < 42; i++) {
+      const d = i - first + 1;
+      let n = d, cls = '';
+      if (d < 1) { n = prevDays + d; cls = 'o'; } else if (d > days) { n = d - days; cls = 'o'; }
+      else if (d === t.getDate() && m === t.getMonth() && y === t.getFullYear()) cls = 'today';
+      cells.push(`<span class="${cls}">${n}</span>`);
+    }
+    $('#cal-grid').innerHTML = cells.join('');
+  }
+  $('#cal-prev').addEventListener('click', () => { calView = new Date(calView.getFullYear(), calView.getMonth() - 1, 1); renderCal(); });
+  $('#cal-next').addEventListener('click', () => { calView = new Date(calView.getFullYear(), calView.getMonth() + 1, 1); renderCal(); });
+  $('#cal-title').addEventListener('click', () => { calView = new Date(); renderCal(); });
+
+  /* погода: Open-Meteo, без ключа */
+  const WX_ICONS = {
+    sun: '<circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.3M12 19.2v2.3M2.5 12h2.3M19.2 12h2.3M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6"/>',
+    'cloud-sun': '<path d="M7 11.5a3.6 3.6 0 0 1 6.5-2"/><path d="M7 4V2.5M2.6 6.4l1-1M12 5.4l1-1"/><path d="M7.5 20.5h9.2a3.8 3.8 0 0 0 .5-7.6 5.2 5.2 0 0 0-9.9 1.1A3.3 3.3 0 0 0 7.500 20.500z"/>',
+    cloud: '<path d="M7.5 19.5h9.2a4 4 0 0 0 .5-8 5.5 5.5 0 0 0-10.500 1.200A3.500 3.500 0 0 0 7.500 19.500z"/>',
+    rain: '<path d="M7.5 15.500h9.200a4 4 0 0 0 .5-8 5.500 5.500 0 0 0-10.500 1.200A3.400 3.400 0 0 0 7.500 15.500z"/><path d="M8 18.500l-1 2.500M12 18.500l-1 2.500M16 18.500l-1 2.500"/>',
+    snow: '<path d="M7.500 14.500h9.200a4 4 0 0 0 .5-8 5.500 5.500 0 0 0-10.500 1.200A3.400 3.400 0 0 0 7.500 14.500z"/><path d="M8 18h.01M12 19.500h.01M16 18h.01M10 21h.01M14 21h.01"/>',
+    storm: '<path d="M7.500 14.500h9.200a4 4 0 0 0 .5-8 5.500 5.500 0 0 0-10.500 1.200A3.400 3.400 0 0 0 7.500 14.500z"/><path d="M12.500 14l-2.500 4h3l-2 4"/>',
+    fog: '<path d="M4 9h16M6 13h12M4 17h16"/>',
+  };
+  function wxInfo(code) {
+    if (code === 0) return ['Ясно', 'sun'];
+    if (code <= 2) return ['Малооблачно', 'cloud-sun'];
+    if (code === 3) return ['Пасмурно', 'cloud'];
+    if (code === 45 || code === 48) return ['Туман', 'fog'];
+    if (code >= 51 && code <= 57) return ['Морось', 'rain'];
+    if (code >= 61 && code <= 67) return ['Дождь', 'rain'];
+    if (code >= 71 && code <= 77) return ['Снег', 'snow'];
+    if (code >= 80 && code <= 82) return ['Ливень', 'rain'];
+    if (code === 85 || code === 86) return ['Снегопад', 'snow'];
+    if (code >= 95) return ['Гроза', 'storm'];
+    return ['Облачно', 'cloud'];
+  }
+  let place = store.get('place', { name: 'Москва', lat: 55.7558, lon: 37.6173 });
+  let wx = store.get('wx', null);
+
+  function paintWeather() {
+    $('#wx-city').textContent = place.name;
+    if (!wx) { $('#wx-temp').textContent = '–'; $('#wx-desc').textContent = 'Нет данных о погоде'; $('#wx-ic').innerHTML = ''; return; }
+    const [txt, ic] = wxInfo(wx.code);
+    $('#wx-temp').textContent = `${wx.temp > 0 ? '+' : ''}${Math.round(wx.temp)}°`;
+    $('#wx-desc').textContent = `${txt} · ${Math.round(wx.min)}…${Math.round(wx.max)}°`;
+    $('#wx-ic').innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${WX_ICONS[ic]}</svg>`;
+  }
+  async function getJson(url) {
+    const doFetch = (T && T.http && T.http.fetch) ? T.http.fetch : window.fetch.bind(window);
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 9000);
+    try {
+      const r = await doFetch(url, { signal: ctl.signal });
+      if (!r.ok) throw new Error('http ' + r.status);
+      return await r.json();
+    } finally { clearTimeout(t); }
+  }
+  async function loadWeather(force) {
+    if (!force && wx && Date.now() - wx.at < 20 * 60 * 1000 && wx.place === place.name) { paintWeather(); return; }
+    paintWeather();
+    try {
+      const j = await getJson(`https://api.open-meteo.com/v1/forecast?latitude=${place.lat}&longitude=${place.lon}&current=temperature_2m,weather_code&daily=temperature_2m_max,temperature_2m_min&timezone=auto&forecast_days=1`);
+      wx = { temp: j.current.temperature_2m, code: j.current.weather_code, min: j.daily.temperature_2m_min[0], max: j.daily.temperature_2m_max[0], at: Date.now(), place: place.name };
+      store.set('wx', wx);
+    } catch { /* без сети остаётся прежнее */ }
+    paintWeather();
+  }
+  $('#td-wx').addEventListener('click', () => {
+    $('#td-cityform').hidden = false;
+    $('#td-wx').hidden = true;
+    $('#td-city').value = place.name;
+    $('#td-city').focus();
+    $('#td-city').select();
+  });
+  $('#td-cityform').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const q = $('#td-city').value.trim();
+    $('#td-cityform').hidden = true;
+    $('#td-wx').hidden = false;
+    if (!q || q === place.name) return;
+    try {
+      const j = await getJson(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=1&language=ru`);
+      const r = j.results && j.results[0];
+      if (!r) { toast('Город не найден', true); return; }
+      place = { name: r.name, lat: r.latitude, lon: r.longitude };
+      store.set('place', place);
+      loadWeather(true);
+    } catch { toast('Не удалось найти город: нет связи', true); }
+  });
+  $('#td-city').addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { e.stopPropagation(); $('#td-cityform').hidden = true; $('#td-wx').hidden = false; }
+  });
+
+  /* секундомер и таймер */
+  const tm = { mode: 'sw', running: false, base: 0, start: 0, total: 5 * 60 * 1000, raf: 0, done: false };
+  const fmt2 = (n) => String(n).padStart(2, '0');
+  function tmElapsed() { return tm.base + (tm.running ? performance.now() - tm.start : 0); }
+  function paintTimer() {
+    const el = tmElapsed();
+    const shown = tm.mode === 'sw' ? el : Math.max(0, tm.total - el);
+    const sec = Math.floor(shown / 1000);
+    $('#tm-main').textContent = sec >= 3600 ? `${Math.floor(sec / 3600)}:${fmt2(Math.floor(sec / 60) % 60)}:${fmt2(sec % 60)}` : `${fmt2(Math.floor(sec / 60))}:${fmt2(sec % 60)}`;
+    $('#tm-sub').textContent = tm.mode === 'sw' ? '.' + fmt2(Math.floor((shown % 1000) / 10)) : '';
+    const C = 2 * Math.PI * 52;
+    const frac = tm.mode === 'sw' ? (el % 60000) / 60000 : 1 - Math.min(1, el / tm.total);
+    const arc = $('#tm-arc');
+    arc.style.strokeDasharray = `${C}`;
+    arc.style.strokeDashoffset = `${C * (1 - frac)}`;
+    if (tm.mode === 'tm' && tm.running && el >= tm.total && !tm.done) {
+      tm.done = true; tm.running = false; tm.base = tm.total;
+      beep(); toast('Время вышло');
+      syncTmButtons();
+    }
+  }
+  function beep() {
+    try {
+      const ac = new (window.AudioContext || window.webkitAudioContext)();
+      [0, 0.22, 0.44].forEach((d) => {
+        const o = ac.createOscillator(), g = ac.createGain();
+        o.frequency.value = 880; o.connect(g); g.connect(ac.destination);
+        g.gain.setValueAtTime(0.0001, ac.currentTime + d);
+        g.gain.exponentialRampToValueAtTime(0.25, ac.currentTime + d + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + d + 0.18);
+        o.start(ac.currentTime + d); o.stop(ac.currentTime + d + 0.2);
+      });
+    } catch { /* без звука */ }
+  }
+  function tmLoop() {
+    cancelAnimationFrame(tm.raf);
+    const step = () => {
+      if (state.tab !== 'today') { tm.raf = 0; return; }
+      paintTimer();
+      if (tm.running) tm.raf = requestAnimationFrame(step); else tm.raf = 0;
+    };
+    step();
+  }
+  function syncTmButtons() {
+    $('#tm-go').textContent = tm.running ? 'Пауза' : (tm.base > 0 && !tm.done ? 'Продолжить' : 'Старт');
+    $$('#tm-mode button').forEach((b) => b.classList.toggle('on', b.dataset.m === tm.mode));
+    $('#tm-presets').hidden = tm.mode !== 'tm';
+    $$('#tm-presets button').forEach((b) => b.classList.toggle('on', +b.dataset.min * 60000 === tm.total));
+  }
+  $('#tm-go').addEventListener('click', () => {
+    if (tm.running) { tm.base = tmElapsed(); tm.running = false; }
+    else {
+      if (tm.mode === 'tm' && (tm.done || tm.base >= tm.total)) { tm.base = 0; tm.done = false; }
+      tm.start = performance.now(); tm.running = true;
+    }
+    syncTmButtons(); tmLoop();
+  });
+  $('#tm-reset').addEventListener('click', () => { tm.running = false; tm.base = 0; tm.done = false; syncTmButtons(); tmLoop(); });
+  $('#tm-mode').addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b || b.dataset.m === tm.mode) return;
+    tm.mode = b.dataset.m; tm.running = false; tm.base = 0; tm.done = false;
+    syncTmButtons(); tmLoop();
+  });
+  $('#tm-presets').addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    tm.total = +b.dataset.min * 60000; tm.running = false; tm.base = 0; tm.done = false;
+    syncTmButtons(); tmLoop();
+  });
+
+  function renderTodayNotes() {
+    const list = notes.slice().sort((a, b) => (b.pin - a.pin) || (b.ts - a.ts)).slice(0, 3);
+    $('#td-notelist').innerHTML = list.length
+      ? list.map((n) => `<button class="td-n" data-id="${n.id}"><b class="ellipsis">${esc(noteTitle(n))}</b><small class="ellipsis">${esc((n.body || '').replace(/\s+/g, ' ').slice(0, 60) || 'Пустая заметка')}</small></button>`).join('')
+      : '<div class="n-empty">Заметок пока нет</div>';
+  }
+  $('#td-notelist').addEventListener('click', (e) => {
+    const b = e.target.closest('.td-n');
+    if (!b) return;
+    setTab('notes');
+    openNote(b.dataset.id);
+  });
+  $('#td-allnotes').addEventListener('click', () => setTab('notes'));
+
+  function onTodayShown() {
+    renderToday(); renderCal(); renderTodayNotes(); syncTmButtons(); tmLoop(); loadWeather(false);
+  }
+
   /* ───────────────────────── приложения ───────────────────────── */
 
-  let apps = store.get('apps', []);   // {id, name, path}
+  let customApps = store.get('apps', []);          // {id, name, path}: добавлено вручную
+  let startApps = store.get('startApps', []);      // {name, path}: из меню «Пуск»
+  let pins = store.get('pins', []);                // пути закреплённых
+  let recent = store.get('recent', []);            // пути недавно запущенных
+  let icons = store.get('icons', {});              // path → data-url (или 0, если значка нет)
+  let apQuery = '';
+  let apIO = null;
 
-  function hue(s) {
+  function hue(str) {
     let h = 0;
-    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360;
+    for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) % 360;
     return h;
   }
+  const allApps = () => {
+    const seen = new Set();
+    const out = [];
+    for (const a of startApps) { const k = a.name.toLowerCase(); if (!seen.has(k)) { seen.add(k); out.push({ name: a.name, path: a.path, custom: false }); } }
+    for (const a of customApps) out.push({ name: a.name, path: a.path, custom: true, id: a.id });
+    return out.sort((x, y) => x.name.localeCompare(y.name, 'ru'));
+  };
 
-  function renderApps() {
-    const grid = $('#app-grid');
-    if (!apps.length) {
-      grid.innerHTML = '<div class="empty">Пока пусто. Добавьте программы или ярлыки — они будут запускаться в один клик.</div>';
+  function apRow(a) {
+    const ic = icons[a.path];
+    const pinned = pins.includes(a.path);
+    return `<div class="ap-row" data-path="${esc(a.path)}" title="${esc(a.path)}">
+      <span class="ap-ic" style="${ic ? '' : `background:hsl(${hue(a.name)} 40% 66%)`}">${ic ? `<img alt="" draggable="false" src="${ic}">` : esc([...a.name][0] || '?').toUpperCase()}</span>
+      <span class="ap-nm ellipsis">${esc(a.name)}</span>
+      <span class="ap-kind">${a.custom ? 'Добавлено' : 'Приложение'}</span>
+      <button class="ap-pin${pinned ? ' on' : ''}" data-pin="1" title="${pinned ? 'Открепить' : 'Закрепить'}"><svg viewBox="0 0 24 24"><path d="M12 3.5l2.6 5.4 5.9.8-4.3 4.1 1 5.9L12 17l-5.2 2.7 1-5.9-4.3-4.1 5.9-.8z"/></svg></button>
+    </div>`;
+  }
+
+  function renderApps(keepScroll) {
+    const list = $('#ap-list');
+    const top = keepScroll ? list.scrollTop : 0;
+    const all = allApps();
+    const byPath = new Map(all.map((a) => [a.path, a]));
+    const q = apQuery.trim().toLowerCase();
+    let html = '';
+    if (q) {
+      const found = all.filter((a) => a.name.toLowerCase().includes(q));
+      html = found.length ? found.map(apRow).join('') : '<div class="n-empty">Ничего не найдено</div>';
+      $('#ap-count').textContent = `${found.length} найдено`;
     } else {
-      grid.innerHTML = apps.map((a) => `
-        <button class="app" data-id="${a.id}" title="${esc(a.path)}">
-          ${a.icon
-            ? `<span class="ico real"><img alt="" draggable="false" src="${a.icon}"></span>`
-            : `<span class="ico" style="background:hsl(${hue(a.name)} 45% 70%)">${esc([...a.name][0] || '?').toUpperCase()}</span>`}
-          <span class="nm">${esc(a.name)}</span>
-        </button>`).join('');
+      const pinned = pins.map((p) => byPath.get(p)).filter(Boolean);
+      const rec = recent.map((p) => byPath.get(p)).filter((a) => a && !pins.includes(a.path)).slice(0, 4);
+      if (pinned.length) html += `<div class="ap-h">Закреплённые</div>${pinned.map(apRow).join('')}`;
+      if (rec.length) html += `<div class="ap-h">Недавние</div>${rec.map(apRow).join('')}`;
+      html += `<div class="ap-h">Все приложения</div>${all.length ? all.map(apRow).join('') : '<div class="n-empty">Список загружается…</div>'}`;
+      $('#ap-count').textContent = `${all.length} ${plural(all.length, ['приложение', 'приложения', 'приложений'])}`;
     }
-    store.set('apps', apps);
-    if (state.tab === 'apps') fitShell();
-    loadIcons();
+    list.innerHTML = html;
+    list.scrollTop = top;
+    observeRows();
   }
 
-  /** Подтягивает настоящие значки программ (один раз, дальше берутся из сохранённого) */
-  let iconsBusy = false;
-  async function loadIcons() {
-    if (iconsBusy) return;
-    iconsBusy = true;
-    try {
-      for (const a of apps.filter((x) => !x.icon && !x.noIcon)) {
-        let icon = null;
-        try { icon = await invoke('app_icon', { path: a.path }); } catch { /* нет значка */ }
-        if (icon) a.icon = icon; else a.noIcon = true;
-        store.set('apps', apps);
-        const el = $(`.app[data-id="${a.id}"] .ico`);
-        if (el && icon) { el.className = 'ico real'; el.removeAttribute('style'); el.innerHTML = `<img alt="" draggable="false" src="${icon}">`; }
+  /* строки плавно «въезжают» при прокрутке, значки подгружаются по мере появления */
+  function observeRows() {
+    const list = $('#ap-list');
+    if (apIO) apIO.disconnect();
+    if (!('IntersectionObserver' in window)) { $$('.ap-row', list).forEach((r) => r.classList.add('in')); queueIcons(); return; }
+    apIO = new IntersectionObserver((entries) => {
+      let any = false;
+      for (const e of entries) {
+        e.target.classList.toggle('in', e.isIntersecting);
+        if (e.isIntersecting) any = true;
       }
-    } finally { iconsBusy = false; }
+      if (any) queueIcons();
+    }, { root: list, threshold: 0.05 });
+    $$('.ap-row', list).forEach((r) => apIO.observe(r));
   }
 
-  $('#app-grid').addEventListener('click', async (e) => {
-    const b = e.target.closest('.app');
-    if (!b) return;
-    const a = apps.find((x) => x.id === b.dataset.id);
-    if (!a) return;
+  let iconT = 0, iconBusy = false;
+  function queueIcons() { clearTimeout(iconT); iconT = setTimeout(loadVisibleIcons, 90); }
+  async function loadVisibleIcons() {
+    if (iconBusy) { queueIcons(); return; }
+    iconBusy = true;
     try {
-      await invoke('open_target', { target: a.path });
-    } catch (err) { toast(String(err), true); }
+      for (let guard = 0; guard < 8; guard++) {
+        const batch = $$('#ap-list .ap-row.in').filter((r) => icons[r.dataset.path] === undefined).slice(0, 12).map((r) => r.dataset.path);
+        if (!batch.length) break;
+        let res = [];
+        try { res = await invoke('app_icons', { paths: batch }); } catch { res = []; }
+        batch.forEach((p, i) => { icons[p] = (res && res[i]) || 0; });
+        store.set('icons', icons);
+        for (const p of batch) {
+          const row = [...$$('#ap-list .ap-row')].find((r) => r.dataset.path === p);
+          const ic = icons[p];
+          if (row && ic) { const box = row.querySelector('.ap-ic'); box.removeAttribute('style'); box.innerHTML = `<img alt="" draggable="false" src="${ic}">`; }
+        }
+      }
+    } finally { iconBusy = false; }
+  }
+
+  async function refreshStartApps() {
+    try {
+      const fresh = await invoke('list_start_apps');
+      if (Array.isArray(fresh) && fresh.length) {
+        startApps = fresh;
+        store.set('startApps', startApps);
+      }
+    } catch { /* остаётся кэш */ }
+    renderApps(true);
+  }
+
+  $('#ap-search').addEventListener('input', (e) => { apQuery = e.target.value; renderApps(); });
+  $('#ap-search').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { const r = $('#ap-list .ap-row'); if (r) launchApp(r.dataset.path); }
+    if (e.key === 'Escape' && apQuery) { e.stopPropagation(); e.target.value = ''; apQuery = ''; renderApps(); }
   });
-  $('#app-grid').addEventListener('contextmenu', async (e) => {
-    const b = e.target.closest('.app');
-    if (!b) return;
+
+  async function launchApp(path) {
+    try {
+      await invoke('open_target', { target: path });
+      recent = [path, ...recent.filter((p) => p !== path)].slice(0, 8);
+      store.set('recent', recent);
+    } catch (err) { toast(String(err), true); }
+  }
+
+  $('#ap-list').addEventListener('click', (e) => {
+    const row = e.target.closest('.ap-row');
+    if (!row) return;
+    const path = row.dataset.path;
+    if (e.target.closest('[data-pin]')) {
+      pins = pins.includes(path) ? pins.filter((p) => p !== path) : [path, ...pins];
+      store.set('pins', pins);
+      renderApps(true);
+      return;
+    }
+    launchApp(path);
+  });
+  $('#ap-list').addEventListener('contextmenu', async (e) => {
+    const row = e.target.closest('.ap-row');
+    if (!row) return;
     e.preventDefault();
-    const a = apps.find((x) => x.id === b.dataset.id);
-    if (a && await confirmDialog(`Убрать «${a.name}» из шторки? Сама программа останется на месте.`, 'Убрать')) {
-      apps = apps.filter((x) => x.id !== a.id);
-      renderApps();
+    const a = customApps.find((x) => x.path === row.dataset.path);
+    if (a && await confirmDialog(`Убрать «${a.name}» из списка? Сама программа останется на месте.`, 'Убрать')) {
+      customApps = customApps.filter((x) => x.id !== a.id);
+      pins = pins.filter((p) => p !== a.path);
+      store.set('apps', customApps); store.set('pins', pins);
+      renderApps(true);
     }
   });
   $('#app-add').addEventListener('click', () => withBusy(async () => {
@@ -1484,11 +1783,12 @@
       });
       const list = !picked ? [] : Array.isArray(picked) ? picked : [picked];
       for (const p of list) {
-        if (apps.some((a) => a.path === p)) continue;
+        if (customApps.some((a) => a.path === p) || startApps.some((a) => a.path === p)) continue;
         const file = p.split(/[\\/]/).pop() || p;
-        apps.push({ id: uid(), name: file.replace(/\.[^.]+$/, ''), path: p });
+        customApps.push({ id: uid(), name: file.replace(/\.[^.]+$/, ''), path: p });
       }
-      renderApps();
+      store.set('apps', customApps);
+      renderApps(true);
     } catch (e) { toast(String(e), true); }
   }));
 
@@ -1513,6 +1813,6 @@
   tickClock();
   setInterval(tickClock, 15000);
   window.addEventListener('resize', () => { moveIndicator(true); layoutWp(); });
-  applySize();
+  initZoom().then(applySize);
   poll();
 })();
