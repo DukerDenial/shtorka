@@ -180,29 +180,36 @@ fn list_wallpapers(app: tauri::AppHandle, folder: String) -> Result<Vec<Wallpape
 
 /// Обои вшиты прямо в программу — работают и из установщика, и из одиночного .exe
 const WALLPAPERS: &[(&str, &[u8])] = &[
-    ("colors-ember.jpg", include_bytes!("../wallpapers/colors-ember.jpg")),
-    ("colors-forest.jpg", include_bytes!("../wallpapers/colors-forest.jpg")),
-    ("colors-graphite.jpg", include_bytes!("../wallpapers/colors-graphite.jpg")),
-    ("colors-light.jpg", include_bytes!("../wallpapers/colors-light.jpg")),
-    ("colors-lilac.jpg", include_bytes!("../wallpapers/colors-lilac.jpg")),
-    ("colors-sand.jpg", include_bytes!("../wallpapers/colors-sand.jpg")),
-    ("geometry-orbs.jpg", include_bytes!("../wallpapers/geometry-orbs.jpg")),
-    ("geometry-rings.jpg", include_bytes!("../wallpapers/geometry-rings.jpg")),
-    ("geometry-synthwave.jpg", include_bytes!("../wallpapers/geometry-synthwave.jpg")),
-    ("geometry-triangles.jpg", include_bytes!("../wallpapers/geometry-triangles.jpg")),
-    ("landscapes-aurora.jpg", include_bytes!("../wallpapers/landscapes-aurora.jpg")),
-    ("landscapes-dunes.jpg", include_bytes!("../wallpapers/landscapes-dunes.jpg")),
-    ("landscapes-mist.jpg", include_bytes!("../wallpapers/landscapes-mist.jpg")),
-    ("landscapes-moonpath.jpg", include_bytes!("../wallpapers/landscapes-moonpath.jpg")),
-    ("sea-deep.jpg", include_bytes!("../wallpapers/sea-deep.jpg")),
-    ("sea-lagoon.jpg", include_bytes!("../wallpapers/sea-lagoon.jpg")),
-    ("sea-sunset.jpg", include_bytes!("../wallpapers/sea-sunset.jpg")),
-    ("space-galaxy.jpg", include_bytes!("../wallpapers/space-galaxy.jpg")),
-    ("space-nebula.jpg", include_bytes!("../wallpapers/space-nebula.jpg")),
-    ("space-planet.jpg", include_bytes!("../wallpapers/space-planet.jpg")),
-    ("textures-marble.jpg", include_bytes!("../wallpapers/textures-marble.jpg")),
-    ("textures-paper.jpg", include_bytes!("../wallpapers/textures-paper.jpg")),
-    ("textures-waves.jpg", include_bytes!("../wallpapers/textures-waves.jpg")),
+    ("asia-01.jpg", include_bytes!("../wallpapers/asia-01.jpg")),
+    ("asia-13.jpg", include_bytes!("../wallpapers/asia-13.jpg")),
+    ("latin-01.jpg", include_bytes!("../wallpapers/latin-01.jpg")),
+    ("latin-13.jpg", include_bytes!("../wallpapers/latin-13.jpg")),
+    ("rising-01.jpg", include_bytes!("../wallpapers/rising-01.jpg")),
+    ("rising-13.jpg", include_bytes!("../wallpapers/rising-13.jpg")),
+    ("geometry-01.jpg", include_bytes!("../wallpapers/geometry-01.jpg")),
+    ("geometry-12.jpg", include_bytes!("../wallpapers/geometry-12.jpg")),
+    ("cities-01.jpg", include_bytes!("../wallpapers/cities-01.jpg")),
+    ("cities-22.jpg", include_bytes!("../wallpapers/cities-22.jpg")),
+    ("life-01.jpg", include_bytes!("../wallpapers/life-01.jpg")),
+    ("life-22.jpg", include_bytes!("../wallpapers/life-22.jpg")),
+    ("art-01.jpg", include_bytes!("../wallpapers/art-01.jpg")),
+    ("art-29.jpg", include_bytes!("../wallpapers/art-29.jpg")),
+    ("sea-01.jpg", include_bytes!("../wallpapers/sea-01.jpg")),
+    ("sea-18.jpg", include_bytes!("../wallpapers/sea-18.jpg")),
+    ("solid-01.jpg", include_bytes!("../wallpapers/solid-01.jpg")),
+    ("solid-13.jpg", include_bytes!("../wallpapers/solid-13.jpg")),
+    ("landscapes-01.jpg", include_bytes!("../wallpapers/landscapes-01.jpg")),
+    ("landscapes-31.jpg", include_bytes!("../wallpapers/landscapes-31.jpg")),
+    ("textures-01.jpg", include_bytes!("../wallpapers/textures-01.jpg")),
+    ("textures-18.jpg", include_bytes!("../wallpapers/textures-18.jpg")),
+    ("black-01.jpg", include_bytes!("../wallpapers/black-01.jpg")),
+    ("black-15.jpg", include_bytes!("../wallpapers/black-15.jpg")),
+    ("earth-01.jpg", include_bytes!("../wallpapers/earth-01.jpg")),
+    ("earth-24.jpg", include_bytes!("../wallpapers/earth-24.jpg")),
+    ("lgbtq-01.jpg", include_bytes!("../wallpapers/lgbtq-01.jpg")),
+    ("lgbtq-11.jpg", include_bytes!("../wallpapers/lgbtq-11.jpg")),
+    ("native-01.jpg", include_bytes!("../wallpapers/native-01.jpg")),
+    ("native-12.jpg", include_bytes!("../wallpapers/native-12.jpg")),
 ];
 
 /// Раскладывает вшитые обои в папку данных программы и возвращает её путь
@@ -213,6 +220,15 @@ fn bundled_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .map_err(|e| e.to_string())?
         .join("wallpapers");
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    // убираем обои прежних версий, которых больше нет в комплекте
+    if let Ok(rd) = fs::read_dir(&dir) {
+        for e in rd.flatten() {
+            let n = e.file_name().to_string_lossy().to_string();
+            if !WALLPAPERS.iter().any(|(k, _)| *k == n) {
+                let _ = fs::remove_file(e.path());
+            }
+        }
+    }
     for (name, bytes) in WALLPAPERS.iter() {
         let p = dir.join(name);
         let same = fs::metadata(&p).map(|m| m.len() == bytes.len() as u64).unwrap_or(false);
@@ -235,6 +251,46 @@ async fn set_wallpaper(path: String) -> Result<(), String> {
 }
 
 // ───────────────────────── запуск и питание ─────────────────────────
+
+/// Настоящий значок программы или ярлыка (PNG в base64) — тот же, что показывает Проводник
+#[tauri::command]
+async fn app_icon(path: String) -> Result<Option<String>, String> {
+    blocking(move || {
+        const PS: &str = r#"
+Add-Type -AssemblyName System.Drawing
+$p = $env:SH_PATH
+try {
+  if ($p -like '*.lnk') {
+    $t = (New-Object -ComObject WScript.Shell).CreateShortcut($p)
+    if ($t.IconLocation -and $t.IconLocation -notlike ',*') {
+      $loc = $t.IconLocation.Split(',')[0]
+      if (Test-Path -LiteralPath $loc) { $p2 = $loc }
+    }
+    if (-not $p2 -and $t.TargetPath -and (Test-Path -LiteralPath $t.TargetPath)) { $p2 = $t.TargetPath }
+    if ($p2) { $p = $p2 }
+  }
+  $ic = [System.Drawing.Icon]::ExtractAssociatedIcon($p)
+  $bmp = New-Object System.Drawing.Bitmap 64, 64
+  $g = [System.Drawing.Graphics]::FromImage($bmp)
+  $g.InterpolationMode = 'HighQualityBicubic'
+  $g.DrawImage($ic.ToBitmap(), 0, 0, 64, 64)
+  $ms = New-Object System.IO.MemoryStream
+  $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+  [Convert]::ToBase64String($ms.ToArray())
+} catch { }
+"#;
+        let out = quiet(
+            Command::new("powershell.exe")
+                .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", PS])
+                .env("SH_PATH", &path),
+        )
+        .output();
+        let Ok(out) = out else { return Ok(None) };
+        let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        Ok(if text.len() > 40 { Some(format!("data:image/png;base64,{text}")) } else { None })
+    })
+    .await
+}
 
 /// Открывает программу, ярлык, ссылку https или страницу настроек Windows (ms-settings:)
 #[tauri::command]
@@ -384,6 +440,7 @@ pub fn run() {
             list_bundled_wallpapers,
             set_wallpaper,
             open_target,
+            app_icon,
             power_action,
             get_volume,
             set_volume,

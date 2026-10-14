@@ -1,12 +1,12 @@
 /* ════════ палитры ════════ */
 :root {
   color-scheme: dark;
-  --bg: #0a0a0e;
-  --pillbg: #0d0d12;
-  --pop: #17181e;
+  --bg: #1f1e1d;
+  --pillbg: #1a1918;
+  --pop: #2b2a28;
   --code: rgba(0, 0, 0, .4);
-  --glow: rgba(94, 176, 255, .05);
-  --on-acc: #07101d;
+  --glow: rgba(217, 119, 87, .06);
+  --on-acc: #ffffff;
   --sans: "Figtree", "Onest", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --serif: "EB Garamond", "Onest", Georgia, serif;
   --mono: "JetBrains Mono", Consolas, monospace;
@@ -16,12 +16,12 @@
   --line: rgba(255, 255, 255, .08);
   --panel: linear-gradient(180deg, rgba(255, 255, 255, .068) 0%, rgba(255, 255, 255, .028) 100%);
   --panel-sh: inset 0 1px 0 rgba(255, 255, 255, .06), 0 10px 30px -14px rgba(0, 0, 0, .7);
-  --text: #eef0f6;
-  --mut: #8b91a3;
-  --acc: #62b3ff;
-  --acc2: #4d7cff;
-  --acc-bg: rgba(98, 179, 255, .15);
-  --acc-line: rgba(98, 179, 255, .34);
+  --text: #f0eee6;
+  --mut: #9c9a90;
+  --acc: #e08a67;
+  --acc2: #c6613f;
+  --acc-bg: rgba(224, 138, 103, .16);
+  --acc-line: rgba(224, 138, 103, .38);
   --ok: #5fe3a1;
   --warn: #ffb866;
   --bad: #ff6b7a;
@@ -32,23 +32,23 @@
 @media (prefers-color-scheme: light) {
   :root {
     color-scheme: light;
-    --bg: #f4f4f8;
+    --bg: #faf9f5;
     --pop: #ffffff;
     --code: rgba(0, 0, 0, .06);
-    --glow: rgba(31, 111, 224, .06);
+    --glow: rgba(201, 100, 66, .06);
     --on-acc: #ffffff;
     --surf: rgba(0, 0, 0, .04);
     --surf2: rgba(0, 0, 0, .07);
     --surf3: rgba(0, 0, 0, .13);
     --line: rgba(0, 0, 0, .08);
-    --panel: linear-gradient(180deg, #ffffff 0%, rgba(255, 255, 255, .72) 100%);
-    --panel-sh: 0 1px 0 rgba(255, 255, 255, .9) inset, 0 10px 28px -16px rgba(30, 40, 80, .28);
-    --text: #15171e;
-    --mut: #6a6f7e;
-    --acc: #1f6fe0;
-    --acc2: #3b4fe0;
-    --acc-bg: rgba(31, 111, 224, .11);
-    --acc-line: rgba(31, 111, 224, .34);
+    --panel: linear-gradient(180deg, #ffffff 0%, rgba(255, 255, 255, .8) 100%);
+    --panel-sh: 0 1px 0 rgba(255, 255, 255, .9) inset, 0 10px 28px -16px rgba(60, 40, 20, .25);
+    --text: #1f1e1d;
+    --mut: #73726c;
+    --acc: #c96442;
+    --acc2: #b5532f;
+    --acc-bg: rgba(201, 100, 66, .11);
+    --acc-line: rgba(201, 100, 66, .36);
     --ok: #17a05d;
     --warn: #c47a0c;
     --bad: #d63c4c;
@@ -89,7 +89,7 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
   transition: clip-path .46s cubic-bezier(.7, 0, .25, 1), background .4s;
   will-change: clip-path;
 }
-#shell:not(.open):hover { background: #20222d; }
+#shell:not(.open):hover { background: #2a2826; }
 #shell.open {
   background:
     radial-gradient(900px 320px at 50% -8%, var(--glow), transparent 70%),
@@ -193,8 +193,9 @@ nav#tabs button.on { color: var(--text); }
 
 main { position: relative; flex: 1; min-height: 0; }
 .tab { position: absolute; inset: 0; display: none; padding: 12px 18px 18px; overflow: auto; }
-.tab.on { display: flex; flex-direction: column; gap: 12px; animation: tabin .55s var(--out) backwards; }
-@keyframes tabin { from { opacity: 0; transform: translateY(12px) scale(.995); } to { opacity: 1; transform: none; } }
+.tab.on { display: flex; flex-direction: column; gap: 12px; animation: tabin .16s ease-out backwards; }
+@keyframes tabin { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.tab.on :is(.card, .n-side, .n-edit, .c-side, .c-main, .cc > *, .bento > *, .app, .msg, .wp) { animation-duration: .16s !important; animation-delay: 0s !important; }
 
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb { background: var(--surf3); border-radius: 4px; }
@@ -297,7 +298,7 @@ input:focus, textarea:focus { border-color: var(--acc-line); background: var(--s
 .c-head b { flex: 1; min-width: 0; font: 500 20px/1.2 var(--serif); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .c-head .round { width: 34px; height: 34px; }
 .c-head .round svg { width: 18px; height: 18px; }
-.msgs .empty .spark { width: 46px; height: 46px; margin: 0 auto 12px; border-radius: 50%; background: conic-gradient(from 200deg, #62b3ff, #a78bfa, #ff8fb1, #62b3ff); filter: blur(.3px); animation: spin 8s linear infinite; }
+.msgs .empty .spark { width: 46px; height: 46px; margin: 0 auto 12px; border-radius: 50%; background: conic-gradient(from 200deg, #e08a67, #f2c9a8, #c6613f, #e08a67); filter: blur(.3px); animation: spin 8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .sugg { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 16px; }
 .sugg button { padding: 8px 14px; border-radius: 999px; background: var(--surf2); color: var(--text); font-size: 12.5px; transition: background .2s, transform .2s; }
@@ -639,6 +640,8 @@ button.mb:disabled { opacity: .35; cursor: default; }
 }
 .app:hover { background: var(--surf2); transform: translateY(-3px); }
 .app .ico { width: 46px; height: 46px; border-radius: 15px; display: grid; place-items: center; font-weight: 700; font-size: 19px; color: #07101d; }
+.app .ico.real { background: transparent; box-shadow: none; width: 52px; height: 52px; }
+.app .ico.real img { width: 100%; height: 100%; object-fit: contain; filter: drop-shadow(0 4px 8px rgba(0,0,0,.28)); }
 .app .nm { max-width: 100%; text-align: center; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ═════════ питание ═════════ */

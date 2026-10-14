@@ -188,10 +188,14 @@
     // фокус не должен «застревать» в скрытой вкладке (иначе не работают стрелки в каруселях)
     const act = document.activeElement;
     if (act && act !== document.body && act.blur && !$('#tab-' + name).contains(act)) act.blur();
-    if (name === 'wallpaper') loadWallpapers(false);
-    if (name === 'control') refreshControls();
-    if (name === 'chat') setTimeout(() => $('#chat-input').focus(), 80);
-    pollNow();
+    // тяжёлое — после того, как вкладка уже показана
+    setTimeout(() => {
+      if (state.tab !== name) return;
+      if (name === 'wallpaper') loadWallpapers(false);
+      if (name === 'control') refreshControls();
+      if (name === 'chat') $('#chat-input').focus();
+      if (name === 'stats') pollNow();
+    }, 30);
   }
   $$('#tabs button').forEach((b) => b.addEventListener('click', () => setTab(b.dataset.tab)));
 
@@ -378,6 +382,7 @@
     if (status === 403) return 'Доступ запрещён (403). Проверьте ключ и включён ли доступ к Gemini API. ' + msg;
     if (status === 404) return `Модель «${cfg.model}» не найдена. Поменяйте её через шестерёнку. ` + msg;
     if (status === 429) return 'Превышен лимит запросов или бесплатная квота. Подождите минуту или включите оплату в AI Studio.';
+    if (status === 503 || status === 500) return 'Серверы Gemini сейчас перегружены. Попробуйте через минуту или выберите другую модель в настройках (например, gemini-2.5-flash).';
     return `Ошибка ${status}: ${msg || 'без описания'}`;
   }
 
@@ -455,7 +460,7 @@
 
     chatAbort = new AbortController();
     const abortSignal = chatAbort.signal;
-    const model = encodeURIComponent(cfg.model.replace(/^models\//, ''));
+    let model = encodeURIComponent(cfg.model.replace(/^models\//, ''));
     const px = proxyConfig();
     const common = {
       method: 'POST',
@@ -474,7 +479,7 @@
     /** Потоковый ответ: слова появляются по мере генерации */
     async function viaStream() {
       const res = await fetchLimited(`${API}${model}:streamGenerateContent?alt=sse`, common, WAIT.first, abortSignal);
-      if (!res.ok) throw new Error(parseApiError(res.status, await res.text()));
+      if (!res.ok) throw Object.assign(new Error(parseApiError(res.status, await res.text())), { status: res.status });
       const reader = res.body.getReader();
       const dec = new TextDecoder();
       let buf = '', got = '', blocked = '', first = true;
@@ -504,7 +509,7 @@
     /** Запасной путь: целиком, без потока (если поток завис, например, из-за прокси) */
     async function viaPlain() {
       const res = await fetchLimited(`${API}${model}:generateContent`, common, WAIT.plain, abortSignal);
-      if (!res.ok) throw new Error(parseApiError(res.status, await res.text()));
+      if (!res.ok) throw Object.assign(new Error(parseApiError(res.status, await res.text())), { status: res.status });
       const obj = await res.json();
       const got = partsOf(obj).map((p) => p.text || '').join('');
       if (!got) {
@@ -515,14 +520,34 @@
       return got;
     }
 
+    // Если модель перегружена (503) — пробуем ещё раз, затем запасные модели
+    const FALLBACK = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-flash-lite-latest'];
+    const queue = [cfg.model.replace(/^models\//, ''), ...FALLBACK.filter((m) => m !== cfg.model.replace(/^models\//, ''))];
+    const busy = (e) => e && (e.status === 503 || e.status === 500);
+    const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+    const attempt = async () => {
+      try { return await viaStream(); }
+      catch (e) {
+        if (e && e.message === 'TIMEOUT' && !chat[chat.length - 1].text && !abortSignal.aborted) return viaPlain();
+        throw e;
+      }
+    };
     let got = '';
     try {
-      try {
-        got = await viaStream();
-      } catch (e) {
-        if (e && e.message === 'TIMEOUT' && !chat[chat.length - 1].text && !abortSignal.aborted) got = await viaPlain();
-        else throw e;
+      let lastErr = null;
+      for (let qi = 0; qi < queue.length && !got; qi++) {
+        model = encodeURIComponent(queue[qi]);
+        for (let tryN = 0; tryN < (qi === 0 ? 2 : 1) && !got; tryN++) {
+          try { got = await attempt(); lastErr = null; }
+          catch (e) {
+            lastErr = e;
+            if (!busy(e) || abortSignal.aborted || chat[chat.length - 1].text) throw e;
+            botEl.innerHTML = '<span class="note">Gemini перегружен, пробую ещё раз…</span>';
+            await pause(tryN === 0 && qi === 0 ? 1200 : 300);
+          }
+        }
       }
+      if (lastErr) throw lastErr;
     } catch (e) {
       const partial = chat[chat.length - 1].text;
       if (e && e.name === 'AbortError') {
@@ -921,19 +946,8 @@
     layoutWp();
   }
 
-  const ALBUMS = {
-    landscapes: 'Пейзажи', sea: 'Море', space: 'Космос',
-    geometry: 'Геометрия', textures: 'Текстуры', colors: 'Цвета',
-  };
-  const WP_NAMES = {
-    'landscapes-aurora': 'Полярное сияние', 'landscapes-dunes': 'Закат в дюнах', 'landscapes-mist': 'Горы в тумане',
-    'landscapes-moonpath': 'Лунная дорожка', 'sea-deep': 'Глубина', 'sea-lagoon': 'Лагуна', 'sea-sunset': 'Закат над морем',
-    'space-galaxy': 'Млечный Путь', 'space-nebula': 'Туманность', 'space-planet': 'Горизонт планеты',
-    'geometry-orbs': 'Градиентные сферы', 'geometry-rings': 'Кольца', 'geometry-synthwave': 'Синтвейв', 'geometry-triangles': 'Треугольники',
-    'textures-marble': 'Мрамор', 'textures-paper': 'Бумага', 'textures-waves': 'Волны',
-    'colors-ember': 'Янтарь', 'colors-forest': 'Лес', 'colors-graphite': 'Графит', 'colors-light': 'Пастель',
-    'colors-lilac': 'Сирень', 'colors-sand': 'Песок',
-  };
+  const ALBUMS = {"asia": "Азия и Океания", "latin": "Латиноамерика", "rising": "Новые художники", "geometry": "Геометрия", "cities": "Города", "life": "Жизнь", "art": "Искусство", "sea": "Море", "solid": "Однотонные", "landscapes": "Пейзажи", "textures": "Текстуры", "black": "Темнокожие авторы", "earth": "Фото Земли", "lgbtq": "ЛГБТК+", "native": "Коренные народы США"};
+  const WP_NAMES = {"asia-01": "По волнам", "asia-13": "Bông (хлопок)", "latin-01": "Поля чудес", "latin-13": "Marisol Ortega: Fruitful Fun", "rising-01": "Крокосипед", "rising-13": "Ловцы звезд", "geometry-01": "Tessellation 1", "geometry-12": "Tessellation 3", "cities-01": "Sergey Dzyuba", "cities-22": "Ashish Gaikwad", "life-01": "Andrzej Herman", "life-22": "Liudmyla Khalfina", "art-01": "Watercolor Art by Google", "art-29": "Magic ginkgo", "sea-01": "Коралловые рифы (Новая Каледония)", "sea-18": "Коралловые рифы (9-й ленточный риф, Большой Барьерный риф)", "solid-01": "Синий (Google)", "solid-13": "Желтый (Google)", "landscapes-01": "Giulio Rosso Chioso", "landscapes-31": "Stefano Termanini", "textures-01": "Adam Boender", "textures-18": "Espen Ericsson", "black-01": "Полет в звездах", "black-15": "Жизнь цветов , автор Laci Jordan", "earth-01": "NASA Image Library", "earth-24": "Утрера (Испания)", "lgbtq-01": "Уязвимость", "lgbtq-11": "Мое задумчивое сердце", "native-01": "Память о предках", "native-12": "ᎤᎧᏖᎾ (Рогатый змей)"};
   let wpSource = store.get('wpSource', 'bundled');   // 'bundled' | 'folder'
   let wpAlbum = store.get('wpAlbum', 'all');
   let wpAll = [];
@@ -1342,11 +1356,31 @@
     } else {
       grid.innerHTML = apps.map((a) => `
         <button class="app" data-id="${a.id}" title="${esc(a.path)}">
-          <span class="ico" style="background:hsl(${hue(a.name)} 70% 74%)">${esc([...a.name][0] || '?').toUpperCase()}</span>
+          ${a.icon
+            ? `<span class="ico real"><img alt="" draggable="false" src="${a.icon}"></span>`
+            : `<span class="ico" style="background:hsl(${hue(a.name)} 45% 70%)">${esc([...a.name][0] || '?').toUpperCase()}</span>`}
           <span class="nm">${esc(a.name)}</span>
         </button>`).join('');
     }
     store.set('apps', apps);
+    loadIcons();
+  }
+
+  /** Подтягивает настоящие значки программ (один раз, дальше берутся из сохранённого) */
+  let iconsBusy = false;
+  async function loadIcons() {
+    if (iconsBusy) return;
+    iconsBusy = true;
+    try {
+      for (const a of apps.filter((x) => !x.icon && !x.noIcon)) {
+        let icon = null;
+        try { icon = await invoke('app_icon', { path: a.path }); } catch { /* нет значка */ }
+        if (icon) a.icon = icon; else a.noIcon = true;
+        store.set('apps', apps);
+        const el = $(`.app[data-id="${a.id}"] .ico`);
+        if (el && icon) { el.className = 'ico real'; el.removeAttribute('style'); el.innerHTML = `<img alt="" draggable="false" src="${icon}">`; }
+      }
+    } finally { iconsBusy = false; }
   }
 
   $('#app-grid').addEventListener('click', async (e) => {
