@@ -266,13 +266,25 @@
 
   const DEFAULT_MODEL = 'gemini-flash-latest';
   const SYSTEM_PROMPT = 'Ты помощник в небольшой шторке на рабочем столе. Отвечай на языке пользователя, по делу и без лишней воды. Для кода используй блоки с тремя обратными кавычками.';
+  const API = 'https://generativelanguage.googleapis.com/v1beta/models/';
+  // сколько ждать ответа; для тестов можно подменить
+  const WAIT = (window.__shTest && window.__shTest.wait) || { first: 25000, chunk: 40000, plain: 60000 };
 
   const cfg = {
     get key() { return store.get('gemKey', ''); },
     get model() { return store.get('gemModel', DEFAULT_MODEL); },
   };
-  let chat = store.get('chat', []);   // [{role:'user'|'model'|'err', text}]
+
+  /* Несколько чатов: список слева, как в Gemini */
+  let chats = store.get('chats', null);
+  if (!chats) {
+    const old = store.get('chat', []);   // прежний единственный чат
+    chats = old.length ? [{ id: uid(), title: (old.find((m) => m.role === 'user') || { text: 'Чат' }).text.slice(0, 40), ts: Date.now(), msgs: old }] : [];
+  }
+  let chatId = chats.length ? chats[0].id : null;
+  let chat = chats.length ? chats[0].msgs : [];   // сообщения открытого чата
   let chatAbort = null;
+  const saveChats = () => store.set('chats', chats.slice(0, 40).map((c) => ({ ...c, msgs: c.msgs.slice(-80) })));
 
   function mdInline(s) {
     return s
@@ -290,23 +302,67 @@
   }
 
   const msgsEl = $('#msgs');
+  const nearBottom = () => msgsEl.scrollHeight - msgsEl.scrollTop - msgsEl.clientHeight < 80;
+  const scrollDown = () => { msgsEl.scrollTop = msgsEl.scrollHeight; };
 
-  function nearBottom() {
-    return msgsEl.scrollHeight - msgsEl.scrollTop - msgsEl.clientHeight < 80;
+  const SUGGEST = [
+    ['Объясни простыми словами', 'Объясни простыми словами, как работает интернет'],
+    ['Составь план на день', 'Составь план продуктивного дня'],
+    ['Помоги с кодом', 'Помоги разобраться с кодом: '],
+    ['Переведи на английский', 'Переведи на английский: '],
+  ];
+
+  function renderChatList() {
+    const list = $('#chat-list');
+    if (!chats.length) { list.innerHTML = '<div class="n-empty">Чатов пока нет</div>'; return; }
+    list.innerHTML = chats.map((c) => `
+      <div class="c-row${c.id === chatId ? ' on' : ''}" data-id="${c.id}">
+        <span class="ellipsis">${esc(c.title || 'Новый чат')}</span>
+        <button class="c-del" title="Удалить чат">×</button>
+      </div>`).join('');
+    const cur = chats.find((c) => c.id === chatId);
+    $('#chat-title').textContent = cur ? (cur.title || 'Новый чат') : 'Новый чат';
   }
-  function scrollDown() { msgsEl.scrollTop = msgsEl.scrollHeight; }
 
   function renderChat() {
+    $('#chat-model').textContent = cfg.model.replace(/^models\//, '');
     if (!chat.length) {
       msgsEl.innerHTML = cfg.key
-        ? '<div class="empty"><b>Чем помочь?</b>Это обычный Gemini, только прямо в шторке.</div>'
-        : '<div class="empty"><b>Нужен ключ Gemini API</b>Нажмите «Ключ и модель» внизу и вставьте ключ из Google AI Studio.</div>';
+        ? `<div class="empty"><div class="spark"></div><b>Чем помочь?</b><span>Это настоящий Gemini, только прямо в шторке.</span>
+            <div class="sugg">${SUGGEST.map((x, i) => `<button data-s="${i}">${esc(x[0])}</button>`).join('')}</div></div>`
+        : '<div class="empty"><div class="spark"></div><b>Нужен ключ Gemini API</b><span>Нажмите на шестерёнку справа вверху и вставьте ключ из Google AI Studio.</span></div>';
+      renderChatList();
       return;
     }
     msgsEl.innerHTML = chat
       .map((m, i) => `<div class="msg ${m.role === 'user' ? 'user' : m.role === 'err' ? 'err' : ''}" data-i="${i}">${md(m.text)}</div>`)
       .join('');
     scrollDown();
+    renderChatList();
+  }
+
+  function selectChat(id) {
+    if (chatAbort) return;           // пока идёт ответ, чат не переключаем
+    const c = chats.find((x) => x.id === id);
+    if (!c) return;
+    chatId = id;
+    chat = c.msgs;
+    renderChat();
+  }
+
+  function newChat() {
+    if (chatAbort) return;
+    const empty = chats.find((c) => !c.msgs.length);
+    if (empty) { selectChat(empty.id); }
+    else {
+      const c = { id: uid(), title: 'Новый чат', ts: Date.now(), msgs: [] };
+      chats.unshift(c);
+      chatId = c.id;
+      chat = c.msgs;
+      saveChats();
+      renderChat();
+    }
+    $('#chat-input').focus();
   }
 
   function parseApiError(status, bodyText) {
@@ -320,16 +376,67 @@
     }
     if (status === 400 && low.includes('api key')) return 'Ключ не принят. Проверьте, что вставили его целиком.';
     if (status === 403) return 'Доступ запрещён (403). Проверьте ключ и включён ли доступ к Gemini API. ' + msg;
-    if (status === 404) return `Модель «${cfg.model}» не найдена. Поменяйте её в «Ключ и модель». ` + msg;
+    if (status === 404) return `Модель «${cfg.model}» не найдена. Поменяйте её через шестерёнку. ` + msg;
     if (status === 429) return 'Превышен лимит запросов или бесплатная квота. Подождите минуту или включите оплату в AI Studio.';
     return `Ошибка ${status}: ${msg || 'без описания'}`;
   }
 
-  async function sendChat() {
+  function humanizeError(e) {
+    const m = (e && e.message) ? e.message : String(e);
+    if (m === 'TIMEOUT') {
+      return proxyConfig()
+        ? 'Gemini не ответил вовремя. Скорее всего, прокси не пропускает запросы или очень медленный: нажмите «Проверить» на плитке прокси в «Управлении».'
+        : 'Gemini не ответил вовремя. Проверьте интернет; если сервис недоступен в вашей стране, подключите HTTP-прокси в «Управлении».';
+    }
+    if (/error sending request|failed to fetch|networkerror|connect|dns|tls|proxy/i.test(m)) {
+      return proxyConfig()
+        ? 'Не удалось соединиться с Gemini через прокси. Проверьте адрес, порт, логин и пароль прокси (плитка «Прокси для Gemini» в «Управлении», кнопка «Проверить»).'
+        : 'Не удалось соединиться с Gemini. Проверьте интернет; если сервис недоступен в вашей стране, подключите HTTP-прокси в «Управлении».';
+    }
+    return m;
+  }
+
+  /** fetch с ограничением по времени; отмена пользователем тоже прерывает запрос */
+  async function fetchLimited(url, opts, ms, userSignal) {
+    const doFetch = (T && T.http && T.http.fetch) ? T.http.fetch : window.fetch.bind(window);
+    const ctl = new AbortController();
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; ctl.abort(); }, ms);
+    const onUser = () => ctl.abort();
+    userSignal.addEventListener('abort', onUser);
+    try {
+      return await doFetch(url, { ...opts, signal: ctl.signal });
+    } catch (e) {
+      if (timedOut) throw new Error('TIMEOUT');
+      throw e;
+    } finally {
+      clearTimeout(timer);
+      userSignal.removeEventListener('abort', onUser);
+    }
+  }
+
+  const withTimeout = (p, ms) => new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error('TIMEOUT')), ms);
+    p.then((v) => { clearTimeout(t); resolve(v); }, (e) => { clearTimeout(t); reject(e); });
+  });
+
+  async function sendChat(textOverride) {
     const input = $('#chat-input');
-    const text = input.value.trim();
+    const text = (typeof textOverride === 'string' ? textOverride : input.value).trim();
     if (!text || chatAbort) return;
     if (!cfg.key) { openChatSetup(); return; }
+
+    // первое сообщение создаёт чат, если открытого нет
+    if (!chatId || !chats.find((c) => c.id === chatId)) {
+      const c = { id: uid(), title: 'Новый чат', ts: Date.now(), msgs: [] };
+      chats.unshift(c);
+      chatId = c.id;
+      chat = c.msgs;
+    }
+    const cur = chats.find((c) => c.id === chatId);
+    if (!cur.msgs.some((m) => m.role === 'user')) cur.title = text.replace(/\s+/g, ' ').slice(0, 40);
+    cur.ts = Date.now();
+    chats = [cur, ...chats.filter((c) => c !== cur)];   // свежий чат — наверх списка
 
     chat.push({ role: 'user', text });
     chat.push({ role: 'model', text: '' });
@@ -347,30 +454,33 @@
       .map((m) => ({ role: m.role, parts: [{ text: m.text }] }));
 
     chatAbort = new AbortController();
-    const doFetch = (T && T.http && T.http.fetch) ? T.http.fetch : window.fetch.bind(window);
-    const model = cfg.model.replace(/^models\//, '');
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`;
+    const abortSignal = chatAbort.signal;
+    const model = encodeURIComponent(cfg.model.replace(/^models\//, ''));
+    const px = proxyConfig();
+    const common = {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': cfg.key },
+      body: JSON.stringify({ systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] }, contents: history }),
+      ...(px && T && T.http && T.http.fetch ? { proxy: px } : {}),
+    };
+    const partsOf = (obj) => (obj.candidates && obj.candidates[0] && obj.candidates[0].content && obj.candidates[0].content.parts) || [];
+    const show = (got) => {
+      const stick = nearBottom();
+      chat[chat.length - 1].text = got;
+      botEl.innerHTML = md(got);
+      if (stick) scrollDown();
+    };
 
-    let got = '';
-    try {
-      const res = await doFetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': cfg.key },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-          contents: history,
-        }),
-        signal: chatAbort.signal,
-        ...(proxyConfig() && T && T.http && T.http.fetch ? { proxy: proxyConfig() } : {}),
-      });
+    /** Потоковый ответ: слова появляются по мере генерации */
+    async function viaStream() {
+      const res = await fetchLimited(`${API}${model}:streamGenerateContent?alt=sse`, common, WAIT.first, abortSignal);
       if (!res.ok) throw new Error(parseApiError(res.status, await res.text()));
-
       const reader = res.body.getReader();
       const dec = new TextDecoder();
-      let buf = '';
-      let blocked = '';
+      let buf = '', got = '', blocked = '', first = true;
       for (;;) {
-        const { value, done } = await reader.read();
+        const { value, done } = await withTimeout(reader.read(), first ? WAIT.first : WAIT.chunk);
+        first = false;
         if (done) break;
         buf += dec.decode(value, { stream: true });
         let nl;
@@ -383,36 +493,52 @@
           let obj;
           try { obj = JSON.parse(payload); } catch { continue; }
           if (obj.promptFeedback && obj.promptFeedback.blockReason) blocked = obj.promptFeedback.blockReason;
-          const parts = (obj.candidates && obj.candidates[0] && obj.candidates[0].content && obj.candidates[0].content.parts) || [];
-          for (const p of parts) {
-            if (p.text) {
-              got += p.text;
-              const stick = nearBottom();
-              chat[chat.length - 1].text = got;
-              botEl.innerHTML = md(got);
-              if (stick) scrollDown();
-            }
-          }
+          for (const p of partsOf(obj)) if (p.text) { got += p.text; show(got); }
         }
+        if (abortSignal.aborted) break;
       }
-      if (!got) throw new Error(blocked ? `Запрос заблокирован Gemini (${blocked}).` : 'Gemini вернул пустой ответ.');
+      if (!got && !abortSignal.aborted) throw new Error(blocked ? `Запрос заблокирован Gemini (${blocked}).` : 'Gemini вернул пустой ответ.');
+      return got;
+    }
+
+    /** Запасной путь: целиком, без потока (если поток завис, например, из-за прокси) */
+    async function viaPlain() {
+      const res = await fetchLimited(`${API}${model}:generateContent`, common, WAIT.plain, abortSignal);
+      if (!res.ok) throw new Error(parseApiError(res.status, await res.text()));
+      const obj = await res.json();
+      const got = partsOf(obj).map((p) => p.text || '').join('');
+      if (!got) {
+        const why = obj.promptFeedback && obj.promptFeedback.blockReason;
+        throw new Error(why ? `Запрос заблокирован Gemini (${why}).` : 'Gemini вернул пустой ответ.');
+      }
+      show(got);
+      return got;
+    }
+
+    let got = '';
+    try {
+      try {
+        got = await viaStream();
+      } catch (e) {
+        if (e && e.message === 'TIMEOUT' && !chat[chat.length - 1].text && !abortSignal.aborted) got = await viaPlain();
+        else throw e;
+      }
     } catch (e) {
+      const partial = chat[chat.length - 1].text;
       if (e && e.name === 'AbortError') {
-        if (!got) chat.pop();
+        if (!partial) chat.pop();
+      } else if (partial) {
+        chat.push({ role: 'err', text: humanizeError(e) });
       } else {
-        const msg = (e && e.message) ? e.message : String(e);
-        if (got) {
-          chat.push({ role: 'err', text: msg });
-        } else {
-          chat[chat.length - 1] = { role: 'err', text: msg };
-        }
+        chat[chat.length - 1] = { role: 'err', text: humanizeError(e) };
       }
     } finally {
       chatAbort = null;
       setSending(false);
-      store.set('chat', chat.slice(-60));
+      saveChats();
       renderChat();
     }
+    return got;
   }
 
   function setSending(on) {
@@ -437,17 +563,36 @@
   $('#chat-input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendChat(); }
   });
-  $('#chat-send').addEventListener('click', sendChat);
+  $('#chat-send').addEventListener('click', () => sendChat());
   $('#chat-stop').addEventListener('click', () => { if (chatAbort) chatAbort.abort(); });
-  $('#chat-new').addEventListener('click', () => {
-    if (chatAbort) chatAbort.abort();
-    chat = [];
-    store.set('chat', chat);
-    renderChat();
-    $('#chat-input').focus();
+  $('#chat-new').addEventListener('click', newChat);
+  $('#chat-list').addEventListener('click', async (e) => {
+    const row = e.target.closest('.c-row');
+    if (!row) return;
+    if (e.target.closest('.c-del')) {
+      if (chatAbort) return;
+      const c = chats.find((x) => x.id === row.dataset.id);
+      if (!c || !(await confirmDialog(`Удалить чат «${c.title}»?`, 'Удалить'))) return;
+      chats = chats.filter((x) => x !== c);
+      if (chatId === c.id) {
+        chatId = chats.length ? chats[0].id : null;
+        chat = chats.length ? chats[0].msgs : [];
+      }
+      saveChats();
+      renderChat();
+    } else {
+      selectChat(row.dataset.id);
+    }
+  });
+  msgsEl.addEventListener('click', (e) => {
+    const b = e.target.closest('.sugg button');
+    if (!b) return;
+    const text = SUGGEST[+b.dataset.s][1];
+    if (text.endsWith(': ')) { $('#chat-input').value = text; autoGrow(); $('#chat-input').focus(); }
+    else sendChat(text);
   });
   $('#chat-site').addEventListener('click', () => safe('open_target', { target: 'https://gemini.google.com/app' }));
-  $('#chat-settings').addEventListener('click', openChatSetup);
+  $('#chat-settings').addEventListener('click', () => { if ($('#chat-setup').hidden) openChatSetup(); else $('#chat-setup').hidden = true; });
   $('#key-get').addEventListener('click', () => safe('open_target', { target: 'https://aistudio.google.com/apikey' }));
   $('#key-cancel').addEventListener('click', () => { $('#chat-setup').hidden = true; });
   $('#key-save').addEventListener('click', () => {

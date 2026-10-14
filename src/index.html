@@ -152,21 +152,31 @@
           </div>
         </div>
 
-        <div id="msgs" class="msgs"></div>
-
-        <div class="composer">
-          <textarea id="chat-input" rows="1" placeholder="Спросите Gemini…" spellcheck="false"></textarea>
-          <button id="chat-send" class="send" title="Отправить (Enter)">
-            <svg viewBox="0 0 24 24"><path d="M12 19V5"/><path d="M6 11l6-6 6 6"/></svg>
-          </button>
-          <button id="chat-stop" class="send" title="Остановить" hidden>
-            <svg viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>
-          </button>
-        </div>
-        <div class="chat-tools">
-          <button id="chat-new" class="ghost small">Новый чат</button>
-          <button id="chat-site" class="ghost small">Открыть Gemini в браузере</button>
-          <button id="chat-settings" class="ghost small">Ключ и модель</button>
+        <div class="chatbox">
+          <aside class="c-side">
+            <button id="chat-new" class="c-new"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Новый чат</button>
+            <div id="chat-list" class="c-list"></div>
+            <button id="chat-site" class="ghost small">Gemini в браузере</button>
+          </aside>
+          <div class="c-main">
+            <div class="c-head">
+              <b id="chat-title">Новый чат</b>
+              <span id="chat-model" class="chip"></span>
+              <button id="chat-settings" class="round" title="Ключ, модель">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.3.9a7 7 0 0 0-2-1.2L14.2 3h-4l-.4 2.6a7 7 0 0 0-2 1.2l-2.3-.9-2 3.4 2 1.5A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.4 2.3-.9a7 7 0 0 0 2 1.2l.4 2.6h4l.4-2.6a7 7 0 0 0 2-1.2l2.3.9 2-3.4-2-1.5c.1-.4.1-.8.1-1.2z"/></svg>
+              </button>
+            </div>
+            <div id="msgs" class="msgs"></div>
+            <div class="composer">
+              <textarea id="chat-input" rows="1" placeholder="Спросите Gemini…" spellcheck="false"></textarea>
+              <button id="chat-send" class="send" title="Отправить (Enter)">
+                <svg viewBox="0 0 24 24"><path d="M12 19V5"/><path d="M6 11l6-6 6 6"/></svg>
+              </button>
+              <button id="chat-stop" class="send" title="Остановить" hidden>
+                <svg viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>
+              </button>
+            </div>
+          </div>
         </div>
       </section>
 

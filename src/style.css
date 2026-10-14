@@ -69,6 +69,9 @@ html, body {
 }
 
 button, input, textarea { font: inherit; color: inherit; }
+:where(button) { appearance: none; -webkit-appearance: none; background: none; border: 0; padding: 0; margin: 0; }
+*, *:focus, *:focus-visible { outline: none !important; -webkit-tap-highlight-color: transparent; }
+button { -webkit-user-select: none; user-select: none; cursor: pointer; }
 button { transition: transform .18s var(--out), background .25s, color .25s, opacity .25s, border-color .25s; }
 button:active { transform: scale(.97); }
 svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
@@ -256,7 +259,8 @@ input:focus, textarea:focus { border-color: var(--acc-line); background: var(--s
 .msg pre { margin: 8px 0; padding: 10px 12px; background: var(--code); border: 1px solid var(--line); border-radius: 12px; overflow: auto; }
 .msg code { font: 12px/1.5 "Cascadia Mono", Consolas, monospace; }
 .msg :not(pre) > code { background: var(--code); padding: 1px 5px; border-radius: 5px; }
-.msg.typing::after { content: "▍"; color: var(--acc); animation: blink 1s steps(2) infinite; }
+.msg.typing:empty::after, .msg.typing::after { content: ""; display: inline-block; width: 8px; height: 8px; margin-left: 4px; border-radius: 50%; background: var(--acc); animation: dots 1s ease-in-out infinite; vertical-align: middle; }
+@keyframes dots { 0%, 100% { transform: scale(.5); opacity: .4; } 50% { transform: scale(1); opacity: 1; } }
 @keyframes blink { 50% { opacity: 0; } }
 
 .composer {
@@ -275,7 +279,31 @@ input:focus, textarea:focus { border-color: var(--acc-line); background: var(--s
 }
 .composer .send:hover { filter: brightness(1.12); }
 .composer .send[hidden] { display: none; }
-.chat-tools { display: flex; gap: 4px; margin-top: -4px; }
+#tab-chat { padding-top: 8px; }
+.chatbox { flex: 1; min-height: 0; display: grid; grid-template-columns: 210px 1fr; gap: 12px; }
+.c-side, .c-main { min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+.c-side { background: var(--panel); border: 1px solid var(--line); box-shadow: var(--panel-sh); border-radius: 22px; padding: 10px; }
+.c-new { display: flex; align-items: center; gap: 8px; justify-content: center; padding: 10px; border-radius: 14px; color: #fff; font-weight: 600; background: linear-gradient(180deg, var(--acc), var(--acc2)); box-shadow: 0 4px 14px -4px var(--acc2); }
+.c-new svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; }
+.c-list { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 2px; }
+.c-row { display: flex; align-items: center; gap: 4px; padding: 8px 8px 8px 12px; border-radius: 12px; cursor: pointer; color: var(--mut); transition: background .2s, color .2s; }
+.c-row:hover { background: var(--surf2); color: var(--text); }
+.c-row.on { background: var(--acc-bg); color: var(--text); box-shadow: inset 0 0 0 1px var(--acc-line); }
+.c-row span { flex: 1; }
+.c-del { width: 22px; height: 22px; border-radius: 50%; color: var(--mut); opacity: 0; font-size: 16px; line-height: 1; transition: opacity .2s, background .2s; }
+.c-row:hover .c-del { opacity: 1; }
+.c-del:hover { background: var(--surf3); color: var(--bad); }
+.c-head { display: flex; align-items: center; gap: 10px; padding: 0 2px; }
+.c-head b { flex: 1; min-width: 0; font: 500 20px/1.2 var(--serif); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.c-head .round { width: 34px; height: 34px; }
+.c-head .round svg { width: 18px; height: 18px; }
+.msgs .empty .spark { width: 46px; height: 46px; margin: 0 auto 12px; border-radius: 50%; background: conic-gradient(from 200deg, #62b3ff, #a78bfa, #ff8fb1, #62b3ff); filter: blur(.3px); animation: spin 8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.sugg { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 16px; }
+.sugg button { padding: 8px 14px; border-radius: 999px; background: var(--surf2); color: var(--text); font-size: 12.5px; transition: background .2s, transform .2s; }
+.sugg button:hover { background: var(--surf3); }
+.msg.user { max-width: min(70%, 700px); }
+.msg:not(.user):not(.err) { background: transparent; padding-left: 0; border-radius: 0; max-width: 100%; }
 
 /* ════════ заметки (в духе Apple Notes) ════════ */
 
