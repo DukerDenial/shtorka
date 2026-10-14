@@ -9,10 +9,18 @@
 </head>
 <body>
 
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <linearGradient id="g-acc" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8fd0ff"/><stop offset="1" stop-color="#4d7cff"/></linearGradient>
+  <linearGradient id="g-hot" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffd98a"/><stop offset="1" stop-color="#ff8f3d"/></linearGradient>
+  <linearGradient id="g-crit" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff9aa6"/><stop offset="1" stop-color="#ff3d62"/></linearGradient>
+  <linearGradient id="g-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#62b3ff" stop-opacity=".34"/><stop offset="1" stop-color="#62b3ff" stop-opacity="0"/></linearGradient>
+  <linearGradient id="g-area2" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5fe3a1" stop-opacity=".30"/><stop offset="1" stop-color="#5fe3a1" stop-opacity="0"/></linearGradient>
+</defs></svg>
+
 <div id="shell">
 
   <!-- Свёрнутое состояние: тонкая полоска ~0,5 см -->
-  <div id="pill"><i class="grip"></i></div>
+  <div id="pill"></div>
 
   <!-- Раскрытая шторка -->
   <div id="panel">
@@ -150,47 +158,63 @@
 
       <!-- Задачи -->
       <section id="tab-tasks" class="tab">
-        <form id="task-form" class="row">
-          <input id="task-text" type="text" placeholder="Новая задача…" autocomplete="off">
-          <input id="task-due" type="datetime-local" title="Срок (необязательно)">
-          <button class="primary" type="submit">Добавить</button>
-        </form>
-        <ul id="task-list" class="tasks"></ul>
-        <div class="foot">
-          <span id="task-count" class="hint"></span>
-          <button id="task-clear" class="ghost small">Убрать выполненные</button>
+        <div class="ios-head">
+          <div><h2>Задачи</h2><p id="task-count"></p></div>
+          <button id="task-clear" class="link">Убрать выполненные</button>
         </div>
+        <div class="ios-scroll"><ul id="task-list" class="ios-list"></ul></div>
+        <form id="task-form" class="ios-add">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>
+          <input id="task-text" type="text" placeholder="Новая задача" autocomplete="off">
+          <input id="task-due" type="datetime-local" title="Срок (необязательно)">
+          <button class="go" type="submit" title="Добавить"><svg viewBox="0 0 24 24"><path d="M12 19V5"/><path d="M6 11l6-6 6 6"/></svg></button>
+        </form>
       </section>
 
       <!-- Нагрузка -->
       <section id="tab-stats" class="tab">
-        <div class="stats-grid">
-          <div class="card">
-            <div class="card-h"><span>Процессор</span><b id="st-cpu">–</b></div>
-            <div class="bar"><i id="st-cpu-bar"></i></div>
-            <svg id="st-spark" viewBox="0 0 120 32" preserveAspectRatio="none"><polyline points=""/></svg>
+        <div class="bento">
+
+          <div class="panel p-cpu">
+            <div class="panel-h"><span class="lbl">Процессор</span><b>последняя минута</b></div>
+            <div class="p-body">
+              <div class="ring"><svg viewBox="0 0 100 100"><circle class="bg" cx="50" cy="50" r="42"/><circle id="st-cpu-ring" class="fg" cx="50" cy="50" r="42"/></svg><div class="val" id="st-cpu">–</div></div>
+              <svg id="st-spark" class="chart" viewBox="0 0 300 90" preserveAspectRatio="none">
+                <line class="grid" x1="0" y1="2" x2="300" y2="2"/><line class="grid" x1="0" y1="45" x2="300" y2="45"/><line class="grid" x1="0" y1="88" x2="300" y2="88"/>
+                <path class="area" d=""/><path class="line" d=""/>
+              </svg>
+            </div>
           </div>
-          <div class="card">
-            <div class="card-h"><span>Память</span><b id="st-ram">–</b></div>
-            <div class="bar"><i id="st-ram-bar"></i></div>
-            <div class="hint" id="st-ram-sub">&nbsp;</div>
+
+          <div class="panel p-ram">
+            <div class="panel-h"><span class="lbl">Память</span></div>
+            <div class="p-body">
+              <div class="ring"><svg viewBox="0 0 100 100"><circle class="bg" cx="50" cy="50" r="42"/><circle id="st-ram-ring" class="fg" cx="50" cy="50" r="42"/></svg><div class="val" id="st-ram">–</div></div>
+              <div class="sub" id="st-ram-sub">&nbsp;</div>
+            </div>
           </div>
-          <div class="card">
-            <div class="card-h"><span>Сеть</span></div>
-            <div class="net"><span>↓ <b id="st-down">–</b></span><span>↑ <b id="st-up">–</b></span></div>
+
+          <div class="panel p-net">
+            <div class="panel-h"><span class="lbl">Сеть</span></div>
+            <div class="net-row"><div class="num"><b id="st-down">–</b><span>загрузка</span></div>
+              <svg id="st-net-down" class="chart" viewBox="0 0 300 60" preserveAspectRatio="none"><path class="area" d=""/><path class="line" d=""/></svg></div>
+            <div class="net-row"><div class="num"><b id="st-up">–</b><span>отдача</span></div>
+              <svg id="st-net-up" class="chart green" viewBox="0 0 300 60" preserveAspectRatio="none"><path class="area" d=""/><path class="line" d=""/></svg></div>
           </div>
-          <div class="card">
-            <div class="card-h"><span>Диски</span></div>
+
+          <div class="panel p-disk">
+            <div class="panel-h"><span class="lbl">Диски</span></div>
             <div id="st-disks"></div>
           </div>
-          <div class="card">
-            <div class="card-h"><span>Больше всего процессора</span></div>
+
+          <div class="panel p-top">
+            <div class="panel-h"><span class="lbl">Процессы</span>
+              <div class="seg mini" id="top-seg"><button data-top="cpu" class="on">CPU</button><button data-top="mem">RAM</button></div>
+            </div>
             <ol id="st-top-cpu" class="top"></ol>
+            <ol id="st-top-mem" class="top" hidden></ol>
           </div>
-          <div class="card">
-            <div class="card-h"><span>Больше всего памяти</span></div>
-            <ol id="st-top-mem" class="top"></ol>
-          </div>
+
         </div>
       </section>
 
@@ -207,6 +231,7 @@
           <button id="wp-random" class="ghost">Случайные</button>
           <button id="wp-pick" class="ghost" hidden>Папка…</button>
         </div>
+        <div id="wp-albums" class="albums"></div>
         <div id="wp-stage" class="wp-stage">
           <div id="wp-grid" class="wp-grid"></div>
         </div>

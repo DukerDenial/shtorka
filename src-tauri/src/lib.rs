@@ -14,8 +14,8 @@ use tauri::{Manager, State};
 use util::quiet;
 
 /// Размер свёрнутой полоски (~0,5 см) — должен совпадать с SIZES.compact в app.js
-const COMPACT_W: f64 = 160.0;
-const COMPACT_H: f64 = 19.0;
+const COMPACT_W: f64 = 72.0;
+const COMPACT_H: f64 = 8.0;
 
 /// Выполняет блокирующую работу (COM/WinRT) в отдельном потоке, не задерживая интерфейс
 async fn blocking<T, F>(f: F) -> Result<T, String>
@@ -128,27 +128,54 @@ fn list_wallpapers(app: tauri::AppHandle, folder: String) -> Result<Vec<Wallpape
     scan_wallpapers(&app, &PathBuf::from(folder), false)
 }
 
-/// Где лежат обои, которые идут вместе с программой
-fn bundled_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Ok(res) = app.path().resource_dir() {
-        candidates.push(res.join("wallpapers"));
-        candidates.push(res.join("resources").join("wallpapers"));
-        candidates.push(res.join("_up_").join("wallpapers"));
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            candidates.push(dir.join("wallpapers"));
+/// Обои вшиты прямо в программу — работают и из установщика, и из одиночного .exe
+const WALLPAPERS: &[(&str, &[u8])] = &[
+    ("colors-ember.jpg", include_bytes!("../wallpapers/colors-ember.jpg")),
+    ("colors-forest.jpg", include_bytes!("../wallpapers/colors-forest.jpg")),
+    ("colors-graphite.jpg", include_bytes!("../wallpapers/colors-graphite.jpg")),
+    ("colors-light.jpg", include_bytes!("../wallpapers/colors-light.jpg")),
+    ("colors-lilac.jpg", include_bytes!("../wallpapers/colors-lilac.jpg")),
+    ("colors-sand.jpg", include_bytes!("../wallpapers/colors-sand.jpg")),
+    ("geometry-orbs.jpg", include_bytes!("../wallpapers/geometry-orbs.jpg")),
+    ("geometry-rings.jpg", include_bytes!("../wallpapers/geometry-rings.jpg")),
+    ("geometry-synthwave.jpg", include_bytes!("../wallpapers/geometry-synthwave.jpg")),
+    ("geometry-triangles.jpg", include_bytes!("../wallpapers/geometry-triangles.jpg")),
+    ("landscapes-aurora.jpg", include_bytes!("../wallpapers/landscapes-aurora.jpg")),
+    ("landscapes-dunes.jpg", include_bytes!("../wallpapers/landscapes-dunes.jpg")),
+    ("landscapes-mist.jpg", include_bytes!("../wallpapers/landscapes-mist.jpg")),
+    ("landscapes-moonpath.jpg", include_bytes!("../wallpapers/landscapes-moonpath.jpg")),
+    ("sea-deep.jpg", include_bytes!("../wallpapers/sea-deep.jpg")),
+    ("sea-lagoon.jpg", include_bytes!("../wallpapers/sea-lagoon.jpg")),
+    ("sea-sunset.jpg", include_bytes!("../wallpapers/sea-sunset.jpg")),
+    ("space-galaxy.jpg", include_bytes!("../wallpapers/space-galaxy.jpg")),
+    ("space-nebula.jpg", include_bytes!("../wallpapers/space-nebula.jpg")),
+    ("space-planet.jpg", include_bytes!("../wallpapers/space-planet.jpg")),
+    ("textures-marble.jpg", include_bytes!("../wallpapers/textures-marble.jpg")),
+    ("textures-paper.jpg", include_bytes!("../wallpapers/textures-paper.jpg")),
+    ("textures-waves.jpg", include_bytes!("../wallpapers/textures-waves.jpg")),
+];
+
+/// Раскладывает вшитые обои в папку данных программы и возвращает её путь
+fn bundled_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("wallpapers");
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    for (name, bytes) in WALLPAPERS.iter() {
+        let p = dir.join(name);
+        let same = fs::metadata(&p).map(|m| m.len() == bytes.len() as u64).unwrap_or(false);
+        if !same {
+            fs::write(&p, bytes).map_err(|e| e.to_string())?;
         }
     }
-    // режим разработки (npm run dev)
-    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("wallpapers"));
-    candidates.into_iter().find(|p| p.is_dir())
+    Ok(dir)
 }
 
 #[tauri::command]
 fn list_bundled_wallpapers(app: tauri::AppHandle) -> Result<Vec<Wallpaper>, String> {
-    let dir = bundled_dir(&app).ok_or("Встроенные обои не найдены")?;
+    let dir = bundled_dir(&app)?;
     scan_wallpapers(&app, &dir, true)
 }
 
@@ -226,9 +253,54 @@ async fn set_theme_light(light: bool) -> Result<(), String> {
     blocking(move || controls::set_theme_light(light)).await
 }
 
+/// Тёплая полупрозрачная плёнка поверх экрана — запасной вариант, если драйвер не принял цвет
+fn night_overlay(app: &tauri::AppHandle, strength: f32) -> Result<(), String> {
+    let existing = app.get_webview_window("night");
+    if strength <= 0.0 {
+        if let Some(w) = existing {
+            let _ = w.hide();
+        }
+        return Ok(());
+    }
+    let win = match existing {
+        Some(w) => w,
+        None => {
+            let w = tauri::WebviewWindowBuilder::new(app, "night", tauri::WebviewUrl::App("night.html".into()))
+                .title("Шторка: ночной режим")
+                .decorations(false)
+                .transparent(true)
+                .always_on_top(true)
+                .skip_taskbar(true)
+                .resizable(false)
+                .shadow(false)
+                .focused(false)
+                .visible(false)
+                .build()
+                .map_err(|e| e.to_string())?;
+            let _ = w.set_ignore_cursor_events(true);
+            w
+        }
+    };
+    if let Some(m) = win.primary_monitor().map_err(|e| e.to_string())? {
+        let _ = win.set_position(*m.position());
+        // на пиксель ниже монитора, чтобы Windows не принял окно за полноэкранное приложение и не спрятал панель задач
+        let _ = win.set_size(tauri::PhysicalSize::new(m.size().width, m.size().height.saturating_sub(1)));
+    }
+    let a = (strength.clamp(0.0, 1.0) * 0.42 * 1000.0).round() / 1000.0;
+    let _ = win.eval(format!("document.documentElement.style.setProperty('--a','{}')", a));
+    let _ = win.show();
+    Ok(())
+}
+
 #[tauri::command]
-async fn set_night(strength: f32) -> Result<(), String> {
-    blocking(move || controls::set_night(strength)).await
+async fn set_night(app: tauri::AppHandle, strength: f32) -> Result<(), String> {
+    // сначала пробуем настоящую цветовую гамму; не приняли — накрываем экран тёплой плёнкой
+    let gamma = blocking(move || controls::set_night(strength)).await;
+    if gamma.is_ok() {
+        let _ = night_overlay(&app, 0.0);
+        return Ok(());
+    }
+    night_overlay(&app, strength)
 }
 
 #[tauri::command]

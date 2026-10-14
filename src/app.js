@@ -32,7 +32,7 @@
 
   /* Размеры окна: [ширина, высота]. Ширина 0 = на весь экран.
      compact — тонкая полоска ~0,5 см (19 логических px). Должна совпадать с lib.rs */
-  const SIZES = { compact: [160, 19], normal: [940, 560], wide: [0, 620] };
+  const SIZES = { compact: [72, 8], normal: [940, 560], wide: [0, 620] };
 
   const state = {
     open: false,
@@ -57,7 +57,7 @@
     const [w, h] = state.wide ? SIZES.wide : SIZES.normal;
     await safe('resize_shutter', { width: w, height: h });
     onOpened();
-    requestAnimationFrame(() => shell.classList.add('open'));
+    setTimeout(() => { if (state.open) shell.classList.add('open'); }, 40);   // даём окну дорасти, потом играем анимацию
   }
 
   function collapse(force = false) {
@@ -71,7 +71,7 @@
     collapseT = setTimeout(async () => {
       await safe('resize_shutter', { width: SIZES.compact[0], height: SIZES.compact[1] });
       state.cooldown = Date.now() + 500;
-    }, 340);
+    }, 500);
   }
 
   async function applySize() {
@@ -434,21 +434,27 @@
     return same ? `сегодня, ${hm}` : d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }) + ', ' + hm;
   }
 
-  function renderTasks() {
-    const list = $('#task-list');
-    const sorted = [...tasks].sort((a, b) => {
+  const EMPTY_ICON = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.7 2.7L16 9.5"/></svg>';
+
+  function sortedTasks() {
+    return [...tasks].sort((a, b) => {
       if (a.done !== b.done) return a.done ? 1 : -1;
       if (a.due && b.due) return new Date(a.due) - new Date(b.due);
       if (a.due) return -1;
       if (b.due) return 1;
       return 0;
     });
+  }
+
+  function renderTasks(freshId) {
+    const list = $('#task-list');
+    const sorted = sortedTasks();
     if (!sorted.length) {
-      list.innerHTML = '<li class="empty">Задач пока нет</li>';
+      list.innerHTML = `<li class="empty">${EMPTY_ICON}<span>Всё сделано — задач нет</span></li>`;
     } else {
       list.innerHTML = sorted.map((t) => {
         const late = t.due && !t.done && new Date(t.due) < new Date();
-        return `<li class="${t.done ? 'done' : ''}" data-id="${t.id}">
+        return `<li class="${t.done ? 'done' : ''}${t.id === freshId ? ' in' : ''}" data-id="${t.id}">
           <button class="chk" title="Готово"></button>
           <span class="txt">${esc(t.text)}</span>
           ${t.due ? `<span class="due ${late ? 'late' : ''}">${esc(fmtDue(t.due))}</span>` : ''}
@@ -456,12 +462,16 @@
         </li>`;
       }).join('');
     }
+    updateTaskMeta();
+    store.set('tasks', tasks);
+  }
+
+  function updateTaskMeta() {
     const open = tasks.filter((t) => !t.done).length;
-    $('#task-count').textContent = tasks.length ? `Осталось: ${open} из ${tasks.length}` : '';
+    $('#task-count').textContent = tasks.length ? `Осталось: ${open} из ${tasks.length}` : 'Пока пусто';
     const badge = $('#tasks-badge');
     badge.hidden = open === 0;
     badge.textContent = open;
-    store.set('tasks', tasks);
     moveIndicator(true);   // ширина вкладки «Задачи» меняется вместе с бейджем
   }
 
@@ -469,19 +479,35 @@
     e.preventDefault();
     const text = $('#task-text').value.trim();
     if (!text) return;
-    tasks.push({ id: uid(), text, done: false, due: $('#task-due').value || null });
+    const t = { id: uid(), text, done: false, due: $('#task-due').value || null };
+    tasks.push(t);
     $('#task-text').value = '';
     $('#task-due').value = '';
-    renderTasks();
+    renderTasks(t.id);
     $('#task-text').focus();
   });
+
+  let resortT;
   $('#task-list').addEventListener('click', (e) => {
     const li = e.target.closest('li[data-id]');
     if (!li) return;
     const t = tasks.find((x) => x.id === li.dataset.id);
     if (!t) return;
-    if (e.target.closest('.chk')) { t.done = !t.done; renderTasks(); }
-    else if (e.target.closest('.del')) { tasks = tasks.filter((x) => x.id !== t.id); renderTasks(); }
+    if (e.target.closest('.chk')) {
+      // галочка проигрывается на месте, а пересортировка — чуть позже, чтобы строки не прыгали
+      t.done = !t.done;
+      li.classList.toggle('done', t.done);
+      store.set('tasks', tasks);
+      updateTaskMeta();
+      clearTimeout(resortT);
+      resortT = setTimeout(() => renderTasks(), 650);
+    } else if (e.target.closest('.del')) {
+      tasks = tasks.filter((x) => x.id !== t.id);
+      store.set('tasks', tasks);
+      updateTaskMeta();
+      li.classList.add('out');
+      setTimeout(() => renderTasks(), 300);
+    }
   });
   $('#task-clear').addEventListener('click', () => {
     tasks = tasks.filter((t) => !t.done);
@@ -490,7 +516,9 @@
 
   /* ───────────────────────── нагрузка ───────────────────────── */
 
-  const cpuHist = [];
+  const cpuHist = [], downHist = [], upHist = [];
+  const HIST = 60;
+  const RING = 263.9;
 
   const fmtBytes = (n) => {
     const u = ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ'];
@@ -501,39 +529,70 @@
   const fmtRate = (n) => fmtBytes(n) + '/с';
   const level = (pct) => (pct >= 90 ? 'crit' : pct >= 70 ? 'hot' : '');
 
-  function setBar(el, pct) {
-    el.style.width = Math.max(0, Math.min(100, pct)) + '%';
-    el.className = level(pct);
+  function setRing(el, pct) {
+    const p = Math.max(0, Math.min(100, pct));
+    el.style.strokeDashoffset = String(RING * (1 - p / 100));
+    el.setAttribute('class', ('fg ' + level(p)).trim());
   }
 
+  /** Плавная кривая по точкам истории; последняя точка — у правого края */
+  function drawChart(svg, hist, max, w, h) {
+    if (!svg || !hist.length) return;
+    const step = w / (HIST - 1);
+    const pts = hist.map((v, i) => [w - (hist.length - 1 - i) * step, h - 3 - (Math.min(v, max) / max) * (h - 8)]);
+    let d = `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
+    for (let i = 1; i < pts.length; i++) {
+      const mx = (pts[i - 1][0] + pts[i][0]) / 2, my = (pts[i - 1][1] + pts[i][1]) / 2;
+      d += ` Q ${pts[i - 1][0].toFixed(1)} ${pts[i - 1][1].toFixed(1)} ${mx.toFixed(1)} ${my.toFixed(1)}`;
+    }
+    const last = pts[pts.length - 1];
+    d += ` T ${last[0].toFixed(1)} ${last[1].toFixed(1)}`;
+    svg.querySelector('.line').setAttribute('d', d);
+    svg.querySelector('.area').setAttribute('d', `${d} L ${last[0].toFixed(1)} ${h} L ${pts[0][0].toFixed(1)} ${h} Z`);
+  }
+
+  const push = (arr, v) => { arr.push(v); if (arr.length > HIST) arr.shift(); };
+
   function onStats(s) {
-    cpuHist.push(s.cpu);
-    if (cpuHist.length > 60) cpuHist.shift();
+    push(cpuHist, s.cpu);
+    push(downHist, s.net_down);
+    push(upHist, s.net_up);
     if (!state.open || state.tab !== 'stats') return;
 
-    const cpu = Math.round(s.cpu);
     const ramPct = s.mem_total ? (s.mem_used / s.mem_total) * 100 : 0;
-    $('#st-cpu').textContent = cpu + '%';
-    setBar($('#st-cpu-bar'), s.cpu);
-    const step = 120 / 59;
-    $('#st-spark polyline').setAttribute(
-      'points',
-      cpuHist.map((v, i) => `${(i * step).toFixed(1)},${(32 - (Math.min(100, v) / 100) * 30 - 1).toFixed(1)}`).join(' '),
-    );
+    $('#st-cpu').textContent = Math.round(s.cpu) + '%';
+    setRing($('#st-cpu-ring'), s.cpu);
+    drawChart($('#st-spark'), cpuHist, 100, 300, 90);
+
     $('#st-ram').textContent = Math.round(ramPct) + '%';
-    setBar($('#st-ram-bar'), ramPct);
-    $('#st-ram-sub').textContent = `${fmtBytes(s.mem_used)} из ${fmtBytes(s.mem_total)}`;
+    setRing($('#st-ram-ring'), ramPct);
+    $('#st-ram-sub').innerHTML = `${esc(fmtBytes(s.mem_used))}<br>из ${esc(fmtBytes(s.mem_total))}`;
+
     $('#st-down').textContent = fmtRate(s.net_down);
     $('#st-up').textContent = fmtRate(s.net_up);
+    drawChart($('#st-net-down'), downHist, Math.max(50e3, ...downHist), 300, 60);
+    drawChart($('#st-net-up'), upHist, Math.max(50e3, ...upHist), 300, 60);
 
     $('#st-disks').innerHTML = s.disks.map((d) => {
       const p = d.total ? (d.used / d.total) * 100 : 0;
-      return `<div class="disk"><div class="top2"><b>${esc(d.name)}</b><span>${fmtBytes(d.used)} из ${fmtBytes(d.total)}</span></div><div class="bar"><i class="${level(p)}" style="width:${p.toFixed(0)}%"></i></div></div>`;
+      return `<div class="disk"><div class="top2"><b>${esc(d.name)}</b><span>${fmtBytes(d.used)} из ${fmtBytes(d.total)} · ${p.toFixed(0)}%</span></div><div class="bar"><i class="${level(p)}" style="width:${p.toFixed(0)}%"></i></div></div>`;
     }).join('') || '<span class="hint">Нет данных</span>';
 
-    $('#st-top-cpu').innerHTML = s.top_cpu.map((p) => `<li><span>${esc(p.name)}</span><span>${p.cpu.toFixed(1)}%</span></li>`).join('');
-    $('#st-top-mem').innerHTML = s.top_mem.map((p) => `<li><span>${esc(p.name)}</span><span>${fmtBytes(p.mem)}</span></li>`).join('');
+    const list = (arr, key, fmt) => {
+      const mx = Math.max(1e-9, ...arr.map((p) => p[key]));
+      return arr.map((p) => `<li><span>${esc(p.name)}</span><span>${fmt(p[key])}</span><div class="mb"><i style="width:${((p[key] / mx) * 100).toFixed(0)}%"></i></div></li>`).join('');
+    };
+    $('#st-top-cpu').innerHTML = list(s.top_cpu, 'cpu', (v) => v.toFixed(1) + '%');
+    $('#st-top-mem').innerHTML = list(s.top_mem, 'mem', fmtBytes);
   }
+
+  $('#top-seg').addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    $$('#top-seg button').forEach((x) => x.classList.toggle('on', x === b));
+    $('#st-top-cpu').hidden = b.dataset.top !== 'cpu';
+    $('#st-top-mem').hidden = b.dataset.top !== 'mem';
+  });
 
   /* Опрос идёт только пока открыта вкладка «Нагрузка» — в свёрнутом виде приложение почти ничего не потребляет */
   let pollT;
@@ -605,42 +664,40 @@
     layoutWp();
   }
 
+  const ALBUMS = {
+    landscapes: 'Пейзажи', sea: 'Море', space: 'Космос',
+    geometry: 'Геометрия', textures: 'Текстуры', colors: 'Цвета',
+  };
   const WP_NAMES = {
-    aurora: 'Полярное сияние', dunes: 'Дюны', light: 'Светлый минимал', mist: 'Горы в тумане',
-    moonpath: 'Лунная дорожка', nebula: 'Туманность', orbs: 'Градиентные сферы', synthwave: 'Синтвейв',
+    'landscapes-aurora': 'Полярное сияние', 'landscapes-dunes': 'Закат в дюнах', 'landscapes-mist': 'Горы в тумане',
+    'landscapes-moonpath': 'Лунная дорожка', 'sea-deep': 'Глубина', 'sea-lagoon': 'Лагуна', 'sea-sunset': 'Закат над морем',
+    'space-galaxy': 'Млечный Путь', 'space-nebula': 'Туманность', 'space-planet': 'Горизонт планеты',
+    'geometry-orbs': 'Градиентные сферы', 'geometry-rings': 'Кольца', 'geometry-synthwave': 'Синтвейв', 'geometry-triangles': 'Треугольники',
+    'textures-marble': 'Мрамор', 'textures-paper': 'Бумага', 'textures-waves': 'Волны',
+    'colors-ember': 'Янтарь', 'colors-forest': 'Лес', 'colors-graphite': 'Графит', 'colors-light': 'Пастель',
+    'colors-lilac': 'Сирень', 'colors-sand': 'Песок',
   };
   let wpSource = store.get('wpSource', 'bundled');   // 'bundled' | 'folder'
+  let wpAlbum = store.get('wpAlbum', 'all');
+  let wpAll = [];
 
   function syncWpSource() {
     $$('#wp-src button').forEach((b) => b.classList.toggle('on', b.dataset.src === wpSource));
     $('#wp-pick').hidden = wpSource !== 'folder';
+    $('#wp-albums').hidden = wpSource !== 'bundled';
   }
 
-  async function loadWallpapers(force) {
-    syncWpSource();
+  function renderAlbums() {
+    const keys = ['all', ...Object.keys(ALBUMS).filter((k) => wpAll.some((w) => w.album === k))];
+    if (!keys.includes(wpAlbum)) wpAlbum = 'all';
+    $('#wp-albums').innerHTML = keys
+      .map((k) => `<button data-album="${k}" class="${k === wpAlbum ? 'on' : ''}">${k === 'all' ? 'Все' : ALBUMS[k]}</button>`).join('');
+  }
+
+  /** Строит карусель из wpAll с учётом выбранного альбома */
+  function renderWpGrid() {
     const grid = $('#wp-grid');
-    const key = wpSource === 'bundled' ? 'bundled' : (store.get('wpFolder', null) || (await defaultPicturesDir()));
-    $('#wp-folder').textContent = wpSource === 'bundled' ? 'Идут вместе с программой' : (key || 'Папка не выбрана');
-    if (!key) {
-      wpItems = [];
-      $('#wp-count').textContent = '0';
-      grid.innerHTML = '<div class="empty">Нажмите «Папка…» и выберите папку с картинками (jpg, png, bmp)</div>';
-      return;
-    }
-    if (!force && wpLoadedFor === key) { layoutWp(); return; }
-    try {
-      wpItems = wpSource === 'bundled'
-        ? await invoke('list_bundled_wallpapers')
-        : await invoke('list_wallpapers', { folder: key });
-      if (wpSource === 'bundled') wpItems.forEach((w) => { w.name = WP_NAMES[w.name] || w.name; });
-      wpLoadedFor = key;
-    } catch (e) {
-      wpItems = [];
-      wpLoadedFor = null;
-      $('#wp-count').textContent = '0';
-      grid.innerHTML = `<div class="empty">${esc(String(e))}</div>`;
-      return;
-    }
+    wpItems = wpSource === 'bundled' && wpAlbum !== 'all' ? wpAll.filter((w) => w.album === wpAlbum) : wpAll;
     $('#wp-count').textContent = `${wpItems.length} ${plural(wpItems.length, ['картинка', 'картинки', 'картинок'])}`;
     if (!wpItems.length) {
       grid.innerHTML = '<div class="empty">В этой папке нет картинок jpg, png или bmp</div>';
@@ -655,6 +712,49 @@
     wpIndex = at >= 0 ? at : 0;
     layoutWp();
   }
+
+  async function loadWallpapers(force) {
+    syncWpSource();
+    const grid = $('#wp-grid');
+    const key = wpSource === 'bundled' ? 'bundled' : (store.get('wpFolder', null) || (await defaultPicturesDir()));
+    $('#wp-folder').textContent = wpSource === 'bundled' ? '' : (key || 'Папка не выбрана');
+    if (!key) {
+      wpAll = []; wpItems = [];
+      $('#wp-count').textContent = '0';
+      grid.innerHTML = '<div class="empty">Нажмите «Папка…» и выберите папку с картинками (jpg, png, bmp)</div>';
+      return;
+    }
+    if (!force && wpLoadedFor === key) { layoutWp(); return; }
+    try {
+      wpAll = wpSource === 'bundled'
+        ? await invoke('list_bundled_wallpapers')
+        : await invoke('list_wallpapers', { folder: key });
+      if (wpSource === 'bundled') {
+        wpAll.forEach((w) => {
+          w.album = String(w.name).split('-')[0];
+          w.name = WP_NAMES[w.name] || w.name;
+        });
+        renderAlbums();
+      }
+      wpLoadedFor = key;
+    } catch (e) {
+      wpAll = []; wpItems = [];
+      wpLoadedFor = null;
+      $('#wp-count').textContent = '0';
+      grid.innerHTML = `<div class="empty">${esc(String(e))}</div>`;
+      return;
+    }
+    renderWpGrid();
+  }
+
+  $('#wp-albums').addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    wpAlbum = b.dataset.album;
+    store.set('wpAlbum', wpAlbum);
+    renderAlbums();
+    renderWpGrid();
+  });
 
   $('#wp-src').addEventListener('click', (e) => {
     const b = e.target.closest('button');
@@ -827,6 +927,7 @@
   }
   async function applyNight() {
     paintNight();
+    store.set('nightLevel', +nightEl.value);
     try { await invoke('set_night', { strength: nightOn ? nightEl.value / 100 : 0 }); }
     catch (e) { nightOn = false; store.set('nightOn', false); paintNight(); toast(String(e), true); }
   }

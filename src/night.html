@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Ночной режим</title>
+<style>
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+  /* тёплая янтарная плёнка; сила приходит из шторки */
+  body { background: rgb(255, 150, 40); opacity: var(--a, 0.2); pointer-events: none; transition: opacity .4s; }
+</style>
+<script>
+  try {
+    var read = function () {
+      var v = parseFloat(JSON.parse(localStorage.getItem('sh.nightLevel') || '60')) / 100;
+      document.documentElement.style.setProperty('--a', (Math.min(1, Math.max(0, v)) * 0.42).toFixed(3));
+    };
+    read();
+    window.addEventListener('storage', read);
+  } catch (e) {}
+</script>
+</head>
+<body></body>
+</html>
