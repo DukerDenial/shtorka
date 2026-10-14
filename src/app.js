@@ -873,7 +873,7 @@
     const pct = m.duration > 0 ? Math.min(100, (m.position / m.duration) * 100) : 0;
     $('#m-bar').style.width = pct + '%';
     $('#m-pos').textContent = fmtTime(m.position);
-    $('#m-dur').textContent = m.duration > 0 ? fmtTime(m.duration) : '';
+    $('#m-dur').textContent = m.duration > 0 ? '-' + fmtTime(m.duration - m.position) : '';
     const key = (m.title || '') + '|' + (m.artist || '');
     if (key !== mediaKey) {
       mediaKey = key;
