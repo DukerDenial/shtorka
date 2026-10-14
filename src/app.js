@@ -59,7 +59,8 @@
     state.hover = true;                      // раскрылись, потому что мышь на язычке
     safe('set_open', { open: true });
     onOpened();
-    requestAnimationFrame(() => shell.classList.add('open'));
+    // сначала подгоняем окно под вкладку, потом плавно раскрываем
+    fitShell().then(() => requestAnimationFrame(() => { if (state.open) shell.classList.add('open'); }));
     maybeCollapseLater(2500);                // страховка: открыли и тут же ушли
   }
 
@@ -77,9 +78,42 @@
     }, 520);
   }
 
+  /* Высота шторки подстраивается под содержимое вкладки (как в Hitodama):
+     «Питание» — низкая, «Приложения» растут вместе с числом ярлыков, остальные — на полную высоту.
+     Окно всегда подгоняется под шторку, чтобы пустая часть не перехватывала клики. */
+  let winH = 0, fitT;
+  const maxH = () => (state.wide ? SIZES.wide[1] : SIZES.normal[1]);
+  function naturalH() {
+    const hd = $('header').offsetHeight;
+    if (state.tab === 'power') return hd + 12 + $(".power-grid").offsetHeight + 30;
+    if (state.tab === 'apps') {
+      const grid = $('#app-grid'), last = grid.lastElementChild;
+      const gh = last ? last.offsetTop - grid.offsetTop + last.offsetHeight : 0;
+      return hd + 12 + $('#tab-apps .row').offsetHeight + 12 + gh + 26;
+    }
+    return maxH();
+  }
+  async function fitShell() {
+    const h = Math.round(Math.min(Math.max(naturalH(), 230), maxH()));
+    const need = h + 8;
+    const width = state.wide ? SIZES.wide[0] : SIZES.normal[0];
+    clearTimeout(fitT);
+    if (need > winH) {
+      winH = need;
+      await safe('resize_shutter', { width, height: need });
+      shell.style.setProperty('--h', h + 'px');
+    } else {
+      shell.style.setProperty('--h', h + 'px');
+      fitT = setTimeout(() => {          // окно сжимаем после анимации
+        if (winH !== need) { winH = need; safe('resize_shutter', { width, height: need }); }
+      }, 800);
+    }
+  }
+
   async function applySize() {
-    const [w, h] = state.wide ? SIZES.wide : SIZES.normal;
-    await safe('resize_shutter', { width: w, height: h });
+    shell.style.height = maxH() + 'px';
+    winH = 0;
+    await fitShell();
     moveIndicator(true);
     layoutWp();
   }
@@ -185,6 +219,7 @@
     $$('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === name));
     $$('.tab').forEach((s) => s.classList.toggle('on', s.id === 'tab-' + name));
     moveIndicator(true);
+    fitShell();
     // фокус не должен «застревать» в скрытой вкладке (иначе не работают стрелки в каруселях)
     const act = document.activeElement;
     if (act && act !== document.body && act.blur && !$('#tab-' + name).contains(act)) act.blur();
@@ -1400,6 +1435,7 @@
         </button>`).join('');
     }
     store.set('apps', apps);
+    if (state.tab === 'apps') fitShell();
     loadIcons();
   }
 
