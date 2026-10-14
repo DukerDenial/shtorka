@@ -20,6 +20,12 @@
         },
         {
           "url": "https://geocoding-api.open-meteo.com/*"
+        },
+        {
+          "url": "https://translate.googleapis.com/*"
+        },
+        {
+          "url": "https://api.mymemory.translated.net/*"
         }
       ]
     }

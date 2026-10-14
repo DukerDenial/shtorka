@@ -35,6 +35,7 @@
         <button data-tab="control" class="on">Управление</button>
         <button data-tab="today">Сегодня</button>
         <button data-tab="chat">Gemini</button>
+        <button data-tab="translate">Перевод</button>
         <button data-tab="notes">Заметки</button>
         <button data-tab="stats">Нагрузка</button>
         <button data-tab="wallpaper">Обои</button>
@@ -231,6 +232,32 @@
         </div>
       </section>
 
+      <!-- Перевод -->
+      <section id="tab-translate" class="tab">
+        <div class="tr">
+          <div class="tr-pane">
+            <div class="tr-head">
+              <select id="tr-from"></select>
+              <span id="tr-det" class="tr-det"></span>
+              <span class="spacer"></span>
+              <button id="tr-clear" class="round" title="Очистить"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+            </div>
+            <textarea id="tr-in" placeholder="Введите или вставьте текст…" spellcheck="false"></textarea>
+            <div class="tr-foot"><button id="tr-paste" class="glass" style="padding:5px 12px;font-size:12px">Вставить</button><span id="tr-count"></span></div>
+          </div>
+          <div class="tr-mid"><button id="tr-swap" class="round" title="Поменять языки"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h12l-3-3M17 17H5l3 3"/></svg></button></div>
+          <div class="tr-pane">
+            <div class="tr-head">
+              <select id="tr-to"></select>
+              <span class="spacer"></span>
+              <button id="tr-copy" class="round" title="Копировать перевод"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6.500A2.500 2.500 0 0 1 7.500 4H15"/></svg></button>
+            </div>
+            <div id="tr-out" class="tr-out ph">Перевод появится здесь</div>
+            <div class="tr-foot"><span id="tr-eng"></span></div>
+          </div>
+        </div>
+      </section>
+
       <!-- Заметки -->
       <section id="tab-notes" class="tab">
         <div class="notes">
@@ -369,6 +396,7 @@
   </div>
 </div>
 
+<div id="ctx" class="ctx" hidden></div>
 <div id="toast" hidden></div>
 
 <script src="app.js"></script>

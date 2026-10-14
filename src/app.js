@@ -32,13 +32,13 @@
 
   /* Размеры окна: [ширина, высота]. Ширина 0 = на весь экран.
      compact — тонкая полоска ~0,5 см (19 логических px). Должна совпадать с lib.rs */
-  const SIZES = { normal: [1040, 590], wide: [0, 640] };
+  const SIZES = { normal: [1100, 590], wide: [0, 640] };
 
   const state = {
     open: false,
     pinned: false,
     wide: store.get('wide', false),
-    tab: ['control', 'today', 'chat', 'notes', 'stats', 'wallpaper', 'apps', 'power'].includes(store.get('tab', 'control')) ? store.get('tab', 'control') : 'control',
+    tab: ['control', 'today', 'chat', 'translate', 'notes', 'stats', 'wallpaper', 'apps', 'power'].includes(store.get('tab', 'control')) ? store.get('tab', 'control') : 'control',
     busy: 0,          // >0 — открыт диалог, сворачиваться нельзя
     hover: false,
     cooldown: 0,
@@ -229,6 +229,7 @@
       if (state.tab !== name) return;
       if (name === 'wallpaper') loadWallpapers(false);
       if (name === 'today') onTodayShown();
+      if (name === 'translate') $('#tr-in').focus();
       if (name === 'apps') { renderApps(true); refreshStartApps(); }
       if (name === 'control') refreshControls();
       if (name === 'chat') $('#chat-input').focus();
@@ -841,6 +842,8 @@
   // «отображаемые» значения плавно догоняют настоящие — цифры, кольца и графики не дёргаются
   const sm = { cpu: 0, ram: 0, down: 0, up: 0 };
   const tgt = { cpu: 0, ram: 0, down: 0, up: 0 };
+  const hv = { cpu: 0, down: 0, up: 0 };          // сглаженные значения для истории графиков
+  const smMax = { down: 50e3, up: 50e3 };         // масштаб сетевых графиков тоже меняется плавно
   let smReady = false, sampleAt = 0, lastFrame = 0, statsRaf = 0;
 
   const fmtBytes = (n) => {
@@ -884,19 +887,24 @@
     if (!statsVisible()) return;
     const dt = Math.min(0.1, (now - lastFrame) / 1000 || 0.016);
     lastFrame = now;
-    const k = 1 - Math.exp(-dt * 6);
+    const k = 1 - Math.exp(-dt * 2.6);
     for (const key of Object.keys(sm)) sm[key] += (tgt[key] - sm[key]) * k;
+    const km = 1 - Math.exp(-dt * 1.4);
+    const wantDown = Math.max(50e3, ...downHist), wantUp = Math.max(50e3, ...upHist);
+    smMax.down += (wantDown - smMax.down) * km;
+    smMax.up += (wantUp - smMax.up) * km;
+    const live = (arr, v) => (arr.length ? [...arr.slice(0, -1), v] : arr);
     const phase = Math.max(0, Math.min(1, (now - sampleAt) / 1000));
 
     $('#st-cpu').textContent = Math.round(sm.cpu) + '%';
     setRing($('#st-cpu-ring'), sm.cpu);
-    drawChart($('#st-spark'), cpuHist, 100, 300, 90, phase);
+    drawChart($('#st-spark'), live(cpuHist, sm.cpu), 100, 300, 90, phase);
     $('#st-ram').textContent = Math.round(sm.ram) + '%';
     setRing($('#st-ram-ring'), sm.ram);
     $('#st-down').textContent = fmtRate(sm.down);
     $('#st-up').textContent = fmtRate(sm.up);
-    drawChart($('#st-net-down'), downHist, Math.max(50e3, ...downHist), 300, 60, phase);
-    drawChart($('#st-net-up'), upHist, Math.max(50e3, ...upHist), 300, 60, phase);
+    drawChart($('#st-net-down'), live(downHist, sm.down), smMax.down, 300, 60, phase);
+    drawChart($('#st-net-up'), live(upHist, sm.up), smMax.up, 300, 60, phase);
     statsRaf = requestAnimationFrame(statsFrame);
   }
   function startStatsFrames() {
@@ -904,9 +912,14 @@
   }
 
   function onStats(s) {
-    push(cpuHist, s.cpu);
-    push(downHist, s.net_down);
-    push(upHist, s.net_up);
+    // история хранит слегка сглаженные значения, поэтому резкие всплески не рисуют «пилу»
+    const a = smReady ? 0.5 : 1;
+    hv.cpu += (s.cpu - hv.cpu) * a;
+    hv.down += (s.net_down - hv.down) * a;
+    hv.up += (s.net_up - hv.up) * a;
+    push(cpuHist, hv.cpu);
+    push(downHist, hv.down);
+    push(upHist, hv.up);
     const ramPct = s.mem_total ? (s.mem_used / s.mem_total) * 100 : 0;
     Object.assign(tgt, { cpu: s.cpu, ram: ramPct, down: s.net_down, up: s.net_up });
     if (!smReady) { Object.assign(sm, tgt); smReady = true; }
@@ -1485,6 +1498,7 @@
   }
   let place = store.get('place', { name: 'Москва', lat: 55.7558, lon: 37.6173 });
   let wx = store.get('wx', null);
+  let wxFailed = false;
 
   function paintWeather() {
     $('#wx-city').textContent = place.name;
@@ -1494,15 +1508,20 @@
     $('#wx-desc').textContent = `${txt} · ${Math.round(wx.min)}…${Math.round(wx.max)}°`;
     $('#wx-ic').innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${WX_ICONS[ic]}</svg>`;
   }
-  async function getJson(url) {
-    const doFetch = (T && T.http && T.http.fetch) ? T.http.fetch : window.fetch.bind(window);
-    const ctl = new AbortController();
-    const t = setTimeout(() => ctl.abort(), 9000);
-    try {
-      const r = await doFetch(url, { signal: ctl.signal });
-      if (!r.ok) throw new Error('http ' + r.status);
-      return await r.json();
-    } finally { clearTimeout(t); }
+  async function getJson(url, opts = {}) {
+    const attempts = [window.fetch && window.fetch.bind(window), T && T.http && T.http.fetch].filter(Boolean);
+    let lastErr = null;
+    for (const doFetch of attempts) {
+      const ctl = new AbortController();
+      const t = setTimeout(() => ctl.abort(), 9000);
+      try {
+        const r = await doFetch(url, { ...opts, signal: ctl.signal });
+        if (!r.ok) throw new Error('http ' + r.status);
+        return await r.json();
+      } catch (e) { lastErr = e; }
+      finally { clearTimeout(t); }
+    }
+    throw lastErr || new Error('нет связи');
   }
   async function loadWeather(force) {
     if (!force && wx && Date.now() - wx.at < 20 * 60 * 1000 && wx.place === place.name) { paintWeather(); return; }
@@ -1511,10 +1530,17 @@
       const j = await getJson(`https://api.open-meteo.com/v1/forecast?latitude=${place.lat}&longitude=${place.lon}&current=temperature_2m,weather_code&daily=temperature_2m_max,temperature_2m_min&timezone=auto&forecast_days=1`);
       wx = { temp: j.current.temperature_2m, code: j.current.weather_code, min: j.daily.temperature_2m_min[0], max: j.daily.temperature_2m_max[0], at: Date.now(), place: place.name };
       store.set('wx', wx);
-    } catch { /* без сети остаётся прежнее */ }
+    } catch (e) {
+      paintWeather();
+      if (!wx) $('#wx-desc').textContent = 'Нет связи с сервисом погоды. Нажмите, чтобы повторить';
+      wxFailed = true;
+      return;
+    }
+    wxFailed = false;
     paintWeather();
   }
   $('#td-wx').addEventListener('click', () => {
+    if (wxFailed) { loadWeather(true); return; }
     $('#td-cityform').hidden = false;
     $('#td-wx').hidden = true;
     $('#td-city').value = place.name;
@@ -1762,17 +1788,34 @@
     }
     launchApp(path);
   });
-  $('#ap-list').addEventListener('contextmenu', async (e) => {
+  $('#ap-list').addEventListener('contextmenu', (e) => {
     const row = e.target.closest('.ap-row');
     if (!row) return;
     e.preventDefault();
-    const a = customApps.find((x) => x.path === row.dataset.path);
-    if (a && await confirmDialog(`Убрать «${a.name}» из списка? Сама программа останется на месте.`, 'Убрать')) {
-      customApps = customApps.filter((x) => x.id !== a.id);
-      pins = pins.filter((p) => p !== a.path);
-      store.set('apps', customApps); store.set('pins', pins);
-      renderApps(true);
+    const path = row.dataset.path;
+    const app = allApps().find((x) => x.path === path);
+    if (!app) return;
+    const pinned = pins.includes(path);
+    const items = [
+      { icon: 'open', label: 'Открыть', run: () => launchApp(path) },
+      { icon: 'admin', label: 'Запустить от имени администратора', run: async () => {
+        try { await invoke('run_as_admin', { path }); recent = [path, ...recent.filter((p) => p !== path)].slice(0, 8); store.set('recent', recent); }
+        catch (err) { toast(String(err), true); }
+      } },
+      '-',
+      { icon: 'pin', label: pinned ? 'Открепить' : 'Закрепить', run: () => { pins = pinned ? pins.filter((p) => p !== path) : [path, ...pins]; store.set('pins', pins); renderApps(true); } },
+      { icon: 'folder', label: 'Показать в папке', run: () => safe('reveal_in_folder', { path }) },
+    ];
+    if (app.custom) {
+      items.push('-', { icon: 'del', danger: true, label: 'Убрать из списка', run: async () => {
+        if (!(await confirmDialog(`Убрать «${app.name}» из списка? Сама программа останется на месте.`, 'Убрать'))) return;
+        customApps = customApps.filter((x) => x.id !== app.id);
+        pins = pins.filter((p) => p !== path);
+        store.set('apps', customApps); store.set('pins', pins);
+        renderApps(true);
+      } });
     }
+    showCtx(e.clientX, e.clientY, items);
   });
   $('#app-add').addEventListener('click', () => withBusy(async () => {
     try {
@@ -1792,6 +1835,113 @@
     } catch (e) { toast(String(e), true); }
   }));
 
+  /* ───────────────────────── переводчик ───────────────────────── */
+
+  const LANGS = [
+    ['auto', 'Определить язык'], ['ru', 'Русский'], ['en', 'Английский'], ['uk', 'Украинский'], ['de', 'Немецкий'],
+    ['fr', 'Французский'], ['es', 'Испанский'], ['it', 'Итальянский'], ['pt', 'Португальский'], ['tr', 'Турецкий'],
+    ['pl', 'Польский'], ['zh-CN', 'Китайский'], ['ja', 'Японский'], ['ko', 'Корейский'], ['ar', 'Арабский'],
+  ];
+  const langName = (c) => (LANGS.find((l) => l[0] === c) || [c, c])[1].replace('Определить язык', 'Авто');
+  let trFrom = store.get('trFrom', 'auto');
+  let trTo = store.get('trTo', 'en');
+  let trTimer = 0, trSeq = 0, trLast = '';
+
+  function fillLangs() {
+    $('#tr-from').innerHTML = LANGS.map((l) => `<option value="${l[0]}">${l[1]}</option>`).join('');
+    $('#tr-to').innerHTML = LANGS.filter((l) => l[0] !== 'auto').map((l) => `<option value="${l[0]}">${l[1]}</option>`).join('');
+    $('#tr-from').value = trFrom;
+    $('#tr-to').value = trTo;
+  }
+
+  async function translateOnce(text, from, to) {
+    // 1) Google (без ключа)
+    try {
+      const j = await getJson(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=${from}&tl=${to}&dt=t&q=${encodeURIComponent(text)}`);
+      const out = (j[0] || []).map((p) => p[0] || '').join('');
+      if (out) return { text: out, det: j[2] || from, eng: 'Google' };
+    } catch { /* пробуем другой */ }
+    // 2) MyMemory
+    const pair = `${from === 'auto' ? (/[а-яё]/i.test(text) ? 'ru' : 'en') : from}|${to}`;
+    const j = await getJson(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text.slice(0, 480))}&langpair=${encodeURIComponent(pair)}`);
+    const out = j && j.responseData && j.responseData.translatedText;
+    if (!out) throw new Error('нет перевода');
+    return { text: out, det: pair.split('|')[0], eng: 'MyMemory' };
+  }
+
+  async function runTranslate() {
+    const text = $('#tr-in').value.trim();
+    const out = $('#tr-out');
+    $('#tr-count').textContent = text ? `${text.length} симв.` : '';
+    if (!text) { out.className = 'tr-out ph'; out.textContent = 'Перевод появится здесь'; $('#tr-det').textContent = ''; $('#tr-eng').textContent = ''; trLast = ''; return; }
+    const seq = ++trSeq;
+    out.className = 'tr-out ph'; out.textContent = 'Перевожу…';
+    try {
+      const r = await translateOnce(text, trFrom, trTo);
+      if (seq !== trSeq) return;
+      out.className = 'tr-out'; out.textContent = r.text;
+      trLast = r.text;
+      $('#tr-det').textContent = trFrom === 'auto' ? `определён: ${langName(r.det)}` : '';
+      $('#tr-eng').textContent = r.eng;
+    } catch {
+      if (seq !== trSeq) return;
+      out.className = 'tr-out err';
+      out.textContent = 'Не удалось перевести: нет связи с сервисами перевода. Проверьте интернет или VPN.';
+    }
+  }
+  const trSoon = () => { clearTimeout(trTimer); trTimer = setTimeout(runTranslate, 450); };
+  $('#tr-in').addEventListener('input', trSoon);
+  $('#tr-from').addEventListener('change', (e) => { trFrom = e.target.value; store.set('trFrom', trFrom); trSoon(); });
+  $('#tr-to').addEventListener('change', (e) => { trTo = e.target.value; store.set('trTo', trTo); trSoon(); });
+  $('#tr-swap').addEventListener('click', () => {
+    const from = trFrom === 'auto' ? ($('#tr-in').value && /[а-яё]/i.test($('#tr-in').value) ? 'ru' : 'en') : trFrom;
+    const text = trLast || $('#tr-in').value;
+    trFrom = trTo; trTo = from;
+    store.set('trFrom', trFrom); store.set('trTo', trTo);
+    fillLangs();
+    $('#tr-in').value = text;
+    runTranslate();
+  });
+  $('#tr-clear').addEventListener('click', () => { $('#tr-in').value = ''; runTranslate(); $('#tr-in').focus(); });
+  $('#tr-copy').addEventListener('click', async () => {
+    if (!trLast) return;
+    try { await navigator.clipboard.writeText(trLast); toast('Скопировано'); } catch { toast('Не удалось скопировать', true); }
+  });
+  $('#tr-paste').addEventListener('click', async () => {
+    try { $('#tr-in').value = await navigator.clipboard.readText(); runTranslate(); } catch { toast('Нет доступа к буферу обмена', true); }
+  });
+
+  /* ───────────────────────── контекстное меню ───────────────────────── */
+
+  const ctx = $('#ctx');
+  const CTX_ICONS = {
+    admin: '<svg viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.500-3 8-7 10-4-2-7-5.500-7-10V6z"/><path d="M9 12l2 2 4-4"/></svg>',
+    open: '<svg viewBox="0 0 24 24"><path d="M8 5.500v13l11-6.500z"/></svg>',
+    pin: '<svg viewBox="0 0 24 24"><path d="M12 3.500l2.600 5.400 5.900.8-4.300 4.100 1 5.900L12 17l-5.200 2.700 1-5.900-4.300-4.100 5.900-.8z"/></svg>',
+    folder: '<svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
+    del: '<svg viewBox="0 0 24 24"><path d="M4 7h16M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg>',
+  };
+  let ctxItems = [];
+  function showCtx(x, y, items) {
+    ctxItems = items;
+    ctx.innerHTML = items.map((it, i) => it === '-' ? '<hr>' : `<button data-i="${i}" class="${it.danger ? 'danger' : ''}">${CTX_ICONS[it.icon] || ''}<span>${it.label}</span></button>`).join('');
+    ctx.hidden = false;
+    const w = ctx.offsetWidth, h = ctx.offsetHeight;
+    ctx.style.left = Math.max(6, Math.min(x, window.innerWidth - w - 6)) + 'px';
+    ctx.style.top = Math.max(6, Math.min(y, window.innerHeight - h - 6)) + 'px';
+  }
+  const hideCtx = () => { ctx.hidden = true; };
+  ctx.addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    const it = ctxItems[+b.dataset.i];
+    hideCtx();
+    if (it && it.run) it.run();
+  });
+  document.addEventListener('mousedown', (e) => { if (!ctx.hidden && !e.target.closest('#ctx')) hideCtx(); }, true);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !ctx.hidden) { e.stopPropagation(); hideCtx(); } }, true);
+  window.addEventListener('blur', hideCtx);
+
   /* ───────────────────────── питание ───────────────────────── */
 
   $$('.power').forEach((b) => b.addEventListener('click', async () => {
@@ -1804,6 +1954,11 @@
 
   /* ───────────────────────── старт ───────────────────────── */
 
+  fillLangs();
+  document.addEventListener('selectstart', (e) => {
+    const t = e.target && (e.target.nodeType === 1 ? e.target : e.target.parentElement);
+    if (t && t.closest && !t.closest('input, textarea, .msg, .tr-out')) e.preventDefault();
+  });
   renderChat();
   initNotes();
   renderApps();

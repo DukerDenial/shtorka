@@ -362,6 +362,38 @@ async fn list_start_apps() -> Result<Vec<StartApp>, String> {
     .await
 }
 
+/// Запускает программу или ярлык от имени администратора (покажется окно UAC)
+#[tauri::command]
+fn run_as_admin(path: String) -> Result<(), String> {
+    if !PathBuf::from(&path).exists() {
+        return Err("Файл не найден — возможно, программу удалили или переместили".into());
+    }
+    quiet(
+        Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-WindowStyle",
+                "Hidden",
+                "-Command",
+                "Start-Process -FilePath $env:SH_T -Verb RunAs",
+            ])
+            .env("SH_T", &path),
+    )
+    .spawn()
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
+/// Показывает файл в Проводнике
+#[tauri::command]
+fn reveal_in_folder(path: String) -> Result<(), String> {
+    quiet(Command::new("explorer.exe").arg(format!("/select,{path}")))
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 /// Открывает программу, ярлык, ссылку https или страницу настроек Windows (ms-settings:)
 #[tauri::command]
 fn open_target(target: String) -> Result<(), String> {
@@ -510,6 +542,8 @@ pub fn run() {
             list_bundled_wallpapers,
             set_wallpaper,
             open_target,
+            run_as_admin,
+            reveal_in_folder,
             app_icons,
             list_start_apps,
             power_action,
