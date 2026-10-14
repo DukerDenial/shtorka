@@ -1,12 +1,13 @@
 //! Управление Windows: громкость, Wi-Fi и Bluetooth, тема, ночной режим, медиа-плеер.
 //! Без зависимостей от Tauri — модуль можно собирать и проверять отдельно.
 
-use crate::night::night_ramp;
+use crate::night::night_factors;
 use crate::util::quiet;
 use serde::Serialize;
 use std::ffi::c_void;
 use std::process::Command;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 
 use windows::core::Interface;
 use windows::Devices::Radios::{Radio, RadioAccessStatus, RadioKind, RadioState};
@@ -16,8 +17,7 @@ use windows::Media::Control::{
     GlobalSystemMediaTransportControlsSessionPlaybackStatus as PlayStatus,
 };
 use windows::Storage::Streams::DataReader;
-use windows::Win32::Graphics::Gdi::{GetDC, ReleaseDC};
-use windows::Win32::UI::ColorSystem::SetDeviceGammaRamp;
+use windows::Win32::UI::Magnification::{MagInitialize, MagSetFullscreenColorEffect, MagUninitialize, MAGCOLOREFFECT};
 use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
 use windows::Win32::Media::Audio::{eConsole, eRender, IMMDeviceEnumerator, MMDeviceEnumerator};
 use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED};
@@ -212,20 +212,76 @@ fn broadcast_theme_change() {
 
 // ───────────────────────── ночной режим ─────────────────────────
 
-/// Программный «ночной свет»: сдвигает цвета экрана в тёплую сторону.
-/// strength 0 возвращает обычные цвета. Действует на основной монитор.
-pub fn set_night(strength: f32) -> Result<(), String> {
-    let ramp = night_ramp(strength);
-    unsafe {
-        let hdc = GetDC(None);
-        let ok = SetDeviceGammaRamp(hdc, ramp.as_ptr() as *const c_void);
-        ReleaseDC(None, hdc);
-        if ok.as_bool() {
-            Ok(())
+/// Ночной свет через Magnification API: цветовая матрица на весь экран (как у «Ночного света» Windows).
+/// Работает независимо от драйвера видеокарты, переход плавный. Матрица живёт, пока работает программа.
+type NightMsg = (f32, std::sync::mpsc::Sender<Result<(), String>>);
+static NIGHT_TX: OnceLock<Mutex<std::sync::mpsc::Sender<NightMsg>>> = OnceLock::new();
+
+fn apply_effect(r: f32, g: f32, b: f32) -> bool {
+    let mut m = MAGCOLOREFFECT::default();
+    m.transform = [
+        r, 0.0, 0.0, 0.0, 0.0, //
+        0.0, g, 0.0, 0.0, 0.0, //
+        0.0, 0.0, b, 0.0, 0.0, //
+        0.0, 0.0, 0.0, 1.0, 0.0, //
+        0.0, 0.0, 0.0, 0.0, 1.0,
+    ];
+    unsafe { MagSetFullscreenColorEffect(&m).as_bool() }
+}
+
+/// Все вызовы Magnification идут из одного выделенного потока — так требует API
+fn night_worker(rx: std::sync::mpsc::Receiver<NightMsg>) {
+    let ready = unsafe { MagInitialize().as_bool() };
+    let mut cur = 0.0f32;
+    while let Ok(mut msg) = rx.recv() {
+        // если пока мы работали, пришли новые значения (двигают ползунок) — берём последнее
+        while let Ok(newer) = rx.try_recv() {
+            let _ = msg.1.send(Ok(()));
+            msg = newer;
+        }
+        let (target, reply) = msg;
+        if !ready {
+            let _ = reply.send(Err("Не удалось запустить цветовой фильтр Windows".into()));
+            continue;
+        }
+        let steps = 8;
+        let mut ok = true;
+        for i in 1..=steps {
+            let s = cur + (target - cur) * (i as f32 / steps as f32);
+            let (r, g, b) = night_factors(s);
+            ok = apply_effect(r, g, b);
+            if !ok {
+                break;
+            }
+            if i < steps {
+                std::thread::sleep(Duration::from_millis(18));
+            }
+        }
+        if ok {
+            cur = target;
+            let _ = reply.send(Ok(()));
         } else {
-            Err("Драйвер видеокарты не принял настройку цвета".into())
+            let _ = reply.send(Err("Windows не приняла цветовой фильтр".into()));
         }
     }
+    unsafe {
+        let _ = MagUninitialize();
+    }
+}
+
+pub fn set_night(strength: f32) -> Result<(), String> {
+    if strength <= 0.0 && NIGHT_TX.get().is_none() {
+        return Ok(()); // фильтр ни разу не включали — сбрасывать нечего
+    }
+    let tx = NIGHT_TX.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || night_worker(rx));
+        Mutex::new(tx)
+    });
+    let (rtx, rrx) = std::sync::mpsc::channel();
+    tx.lock().unwrap_or_else(|e| e.into_inner()).send((strength, rtx)).map_err(err)?;
+    rrx.recv_timeout(Duration::from_secs(3))
+        .map_err(|_| "Цветовой фильтр не ответил".to_string())?
 }
 
 // ───────────────────────── медиа-плеер ─────────────────────────

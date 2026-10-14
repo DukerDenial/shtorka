@@ -32,13 +32,13 @@
 
   /* Размеры окна: [ширина, высота]. Ширина 0 = на весь экран.
      compact — тонкая полоска ~0,5 см (19 логических px). Должна совпадать с lib.rs */
-  const SIZES = { compact: [72, 8], normal: [940, 560], wide: [0, 620] };
+  const SIZES = { normal: [940, 560], wide: [0, 620] };
 
   const state = {
     open: false,
     pinned: false,
     wide: store.get('wide', false),
-    tab: store.get('tab', 'control'),
+    tab: ['control', 'chat', 'notes', 'stats', 'wallpaper', 'apps', 'power'].includes(store.get('tab', 'control')) ? store.get('tab', 'control') : 'control',
     busy: 0,          // >0 — открыт диалог, сворачиваться нельзя
     hover: false,
     cooldown: 0,
@@ -50,14 +50,17 @@
 
   let hoverT, leaveT, collapseT;
 
-  async function expand() {
+  /* Окно всегда одного размера и «прозрачно» для мыши, пока шторка свёрнута (set_open).
+     Раскрытие — только анимация внутри окна, поэтому оно плавное. */
+  function expand() {
     if (state.open) return;
     clearTimeout(collapseT);
     state.open = true;
-    const [w, h] = state.wide ? SIZES.wide : SIZES.normal;
-    await safe('resize_shutter', { width: w, height: h });
+    state.hover = true;                      // раскрылись, потому что мышь на язычке
+    safe('set_open', { open: true });
     onOpened();
-    setTimeout(() => { if (state.open) shell.classList.add('open'); }, 40);   // даём окну дорасти, потом играем анимацию
+    requestAnimationFrame(() => shell.classList.add('open'));
+    maybeCollapseLater(2500);                // страховка: открыли и тут же ушли
   }
 
   function collapse(force = false) {
@@ -67,15 +70,14 @@
     state.open = false;
     shell.classList.remove('open');
     clearTimeout(collapseT);
-    // ждём, пока закончится анимация сжатия, и только потом уменьшаем окно
-    collapseT = setTimeout(async () => {
-      await safe('resize_shutter', { width: SIZES.compact[0], height: SIZES.compact[1] });
+    // после анимации сжатия окно снова пропускает клики сквозь себя
+    collapseT = setTimeout(() => {
+      if (!state.open) safe('set_open', { open: false });
       state.cooldown = Date.now() + 500;
-    }, 500);
+    }, 520);
   }
 
   async function applySize() {
-    if (!state.open) return;
     const [w, h] = state.wide ? SIZES.wide : SIZES.normal;
     await safe('resize_shutter', { width: w, height: h });
     moveIndicator(true);
@@ -118,6 +120,22 @@
   shell.addEventListener('click', () => { if (!state.open) expand(); });
   window.addEventListener('blur', () => { if (state.open) maybeCollapseLater(250); });
 
+  // Курсор над видимой частью шторки? (по области clip-path; нужно, когда браузер не прислал mouseenter)
+  document.addEventListener('mousemove', (e) => {
+    if (!state.open || !document.elementFromPoint) return;
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const inside = !!(el && el.closest && el.closest('#shell'));
+    if (inside !== state.hover) {
+      state.hover = inside;
+      if (inside) clearTimeout(leaveT); else maybeCollapseLater();
+    }
+  });
+
+  // Язычок ловит наведение в Rust (пока окно прозрачно для мыши)
+  if (T && T.event && T.event.listen) {
+    T.event.listen('pill-hover', () => { if (!state.open && Date.now() >= state.cooldown) expand(); });
+  }
+
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       if (!$('#confirm').hidden) { closeConfirm(false); return; }
@@ -143,6 +161,7 @@
     applySize();
   });
   $('#btn-wide').classList.toggle('on', state.wide);
+  if (state.wide) applySize();
 
   /* ───────────────────────── вкладки ───────────────────────── */
 
@@ -421,104 +440,134 @@
     toast('Сохранено');
   });
 
-  /* ───────────────────────── задачи ───────────────────────── */
+  /* ───────────────────────── заметки ───────────────────────── */
 
-  let tasks = store.get('tasks', []);   // {id, text, done, due}
+  let notes = store.get('notes', []);   // {id, title, body, ts, pin}
+  let noteId = null;
+  let noteQ = '';
 
-  function fmtDue(due) {
-    const d = new Date(due);
-    if (isNaN(d)) return '';
-    const today = new Date();
-    const same = d.toDateString() === today.toDateString();
-    const hm = d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-    return same ? `сегодня, ${hm}` : d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }) + ', ' + hm;
+  const noteTitle = (n) => n.title.trim() || n.body.trim().split('\n')[0].slice(0, 60) || 'Новая заметка';
+  const notePreview = (n) => n.body.replace(/\s+/g, ' ').trim().slice(0, 80) || 'Нет текста';
+  function fmtNoteDate(ts) {
+    const d = new Date(ts);
+    const same = d.toDateString() === new Date().toDateString();
+    return same ? d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+      : d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+  }
+  const saveNotes = () => store.set('notes', notes);
+
+  function visibleNotes() {
+    const q = noteQ.trim().toLowerCase();
+    return [...notes]
+      .filter((n) => !q || (n.title + ' ' + n.body).toLowerCase().includes(q))
+      .sort((a, b) => (b.pin === true) - (a.pin === true) || b.ts - a.ts);
   }
 
-  const EMPTY_ICON = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.7 2.7L16 9.5"/></svg>';
-
-  function sortedTasks() {
-    return [...tasks].sort((a, b) => {
-      if (a.done !== b.done) return a.done ? 1 : -1;
-      if (a.due && b.due) return new Date(a.due) - new Date(b.due);
-      if (a.due) return -1;
-      if (b.due) return 1;
-      return 0;
-    });
-  }
-
-  function renderTasks(freshId) {
-    const list = $('#task-list');
-    const sorted = sortedTasks();
-    if (!sorted.length) {
-      list.innerHTML = `<li class="empty">${EMPTY_ICON}<span>Всё сделано — задач нет</span></li>`;
-    } else {
-      list.innerHTML = sorted.map((t) => {
-        const late = t.due && !t.done && new Date(t.due) < new Date();
-        return `<li class="${t.done ? 'done' : ''}${t.id === freshId ? ' in' : ''}" data-id="${t.id}">
-          <button class="chk" title="Готово"></button>
-          <span class="txt">${esc(t.text)}</span>
-          ${t.due ? `<span class="due ${late ? 'late' : ''}">${esc(fmtDue(t.due))}</span>` : ''}
-          <button class="del" title="Удалить">×</button>
-        </li>`;
-      }).join('');
+  function renderNoteList(freshId) {
+    const list = $('#note-list');
+    const items = visibleNotes();
+    if (!items.length) {
+      list.innerHTML = `<div class="n-empty">${noteQ ? 'Ничего не найдено' : 'Заметок пока нет'}</div>`;
+      return;
     }
-    updateTaskMeta();
-    store.set('tasks', tasks);
+    list.innerHTML = items.map((n) => `
+      <button class="n-row${n.id === noteId ? ' on' : ''}${n.id === freshId ? ' in' : ''}" data-id="${n.id}">
+        <span class="n-top"><b class="ellipsis">${n.pin ? '<i class="pinned">●</i>' : ''}${esc(noteTitle(n))}</b><em>${esc(fmtNoteDate(n.ts))}</em></span>
+        <small class="ellipsis">${esc(notePreview(n))}</small>
+      </button>`).join('');
   }
 
-  function updateTaskMeta() {
-    const open = tasks.filter((t) => !t.done).length;
-    $('#task-count').textContent = tasks.length ? `Осталось: ${open} из ${tasks.length}` : 'Пока пусто';
-    const badge = $('#tasks-badge');
-    badge.hidden = open === 0;
-    badge.textContent = open;
-    moveIndicator(true);   // ширина вкладки «Задачи» меняется вместе с бейджем
-  }
-
-  $('#task-form').addEventListener('submit', (e) => {
-    e.preventDefault();
-    const text = $('#task-text').value.trim();
-    if (!text) return;
-    const t = { id: uid(), text, done: false, due: $('#task-due').value || null };
-    tasks.push(t);
-    $('#task-text').value = '';
-    $('#task-due').value = '';
-    renderTasks(t.id);
-    $('#task-text').focus();
-  });
-
-  let resortT;
-  $('#task-list').addEventListener('click', (e) => {
-    const li = e.target.closest('li[data-id]');
-    if (!li) return;
-    const t = tasks.find((x) => x.id === li.dataset.id);
-    if (!t) return;
-    if (e.target.closest('.chk')) {
-      // галочка проигрывается на месте, а пересортировка — чуть позже, чтобы строки не прыгали
-      t.done = !t.done;
-      li.classList.toggle('done', t.done);
-      store.set('tasks', tasks);
-      updateTaskMeta();
-      clearTimeout(resortT);
-      resortT = setTimeout(() => renderTasks(), 650);
-    } else if (e.target.closest('.del')) {
-      tasks = tasks.filter((x) => x.id !== t.id);
-      store.set('tasks', tasks);
-      updateTaskMeta();
-      li.classList.add('out');
-      setTimeout(() => renderTasks(), 300);
+  function paintEditor() {
+    const n = notes.find((x) => x.id === noteId);
+    $('#note-edit').classList.toggle('none', !n);
+    if (!n) {
+      $('#note-title').value = '';
+      $('#note-body').value = '';
+      $('#note-date').textContent = '';
+      return;
     }
+    $('#note-title').value = n.title;
+    $('#note-body').value = n.body;
+    $('#note-date').textContent = 'Изменено ' + new Date(n.ts).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+    $('#note-pin').classList.toggle('on', !!n.pin);
+  }
+
+  function openNote(id) {
+    noteId = id;
+    paintEditor();
+    renderNoteList();
+  }
+
+  function newNote() {
+    const n = { id: uid(), title: '', body: '', ts: Date.now(), pin: false };
+    notes.unshift(n);
+    saveNotes();
+    noteQ = '';
+    $('#note-search').value = '';
+    noteId = n.id;
+    paintEditor();
+    renderNoteList(n.id);
+    setTimeout(() => $('#note-title').focus(), 60);
+  }
+
+  let noteSaveT;
+  function onNoteEdit() {
+    const n = notes.find((x) => x.id === noteId);
+    if (!n) return;
+    n.title = $('#note-title').value;
+    n.body = $('#note-body').value;
+    n.ts = Date.now();
+    $('#note-date').textContent = 'Сохранено';
+    clearTimeout(noteSaveT);
+    noteSaveT = setTimeout(() => { saveNotes(); renderNoteList(); }, 250);
+  }
+
+  $('#note-new').addEventListener('click', newNote);
+  $('#note-title').addEventListener('input', onNoteEdit);
+  $('#note-body').addEventListener('input', onNoteEdit);
+  $('#note-title').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); $('#note-body').focus(); }
   });
-  $('#task-clear').addEventListener('click', () => {
-    tasks = tasks.filter((t) => !t.done);
-    renderTasks();
+  $('#note-search').addEventListener('input', () => { noteQ = $('#note-search').value; renderNoteList(); });
+  $('#note-list').addEventListener('click', (e) => {
+    const r = e.target.closest('.n-row');
+    if (r) openNote(r.dataset.id);
   });
+  $('#note-pin').addEventListener('click', () => {
+    const n = notes.find((x) => x.id === noteId);
+    if (!n) return;
+    n.pin = !n.pin;
+    saveNotes();
+    $('#note-pin').classList.toggle('on', n.pin);
+    renderNoteList();
+  });
+  $('#note-del').addEventListener('click', async () => {
+    const n = notes.find((x) => x.id === noteId);
+    if (!n || !(await confirmDialog(`Удалить заметку «${noteTitle(n)}»?`, 'Удалить'))) return;
+    notes = notes.filter((x) => x.id !== n.id);
+    saveNotes();
+    const next = visibleNotes()[0];
+    noteId = next ? next.id : null;
+    paintEditor();
+    renderNoteList();
+  });
+
+  function initNotes() {
+    const first = visibleNotes()[0];
+    noteId = first ? first.id : null;
+    paintEditor();
+    renderNoteList();
+  }
 
   /* ───────────────────────── нагрузка ───────────────────────── */
 
   const cpuHist = [], downHist = [], upHist = [];
   const HIST = 60;
   const RING = 263.9;
+  // «отображаемые» значения плавно догоняют настоящие — цифры, кольца и графики не дёргаются
+  const sm = { cpu: 0, ram: 0, down: 0, up: 0 };
+  const tgt = { cpu: 0, ram: 0, down: 0, up: 0 };
+  let smReady = false, sampleAt = 0, lastFrame = 0, statsRaf = 0;
 
   const fmtBytes = (n) => {
     const u = ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ'];
@@ -532,14 +581,16 @@
   function setRing(el, pct) {
     const p = Math.max(0, Math.min(100, pct));
     el.style.strokeDashoffset = String(RING * (1 - p / 100));
-    el.setAttribute('class', ('fg ' + level(p)).trim());
+    const cls = ('fg ' + level(p)).trim();
+    if (el.getAttribute('class') !== cls) el.setAttribute('class', cls);
   }
 
-  /** Плавная кривая по точкам истории; последняя точка — у правого края */
-  function drawChart(svg, hist, max, w, h) {
+  /** Плавная кривая по истории; phase 0..1 — доля секунды с последнего замера (график едет влево непрерывно) */
+  function drawChart(svg, hist, max, w, h, phase) {
     if (!svg || !hist.length) return;
     const step = w / (HIST - 1);
-    const pts = hist.map((v, i) => [w - (hist.length - 1 - i) * step, h - 3 - (Math.min(v, max) / max) * (h - 8)]);
+    const pts = hist.map((v, i) => [w - (hist.length - 1 - i) * step - step * phase, h - 3 - (Math.min(v, max) / max) * (h - 8)]);
+    pts.push([w, pts[pts.length - 1][1]]);
     let d = `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
     for (let i = 1; i < pts.length; i++) {
       const mx = (pts[i - 1][0] + pts[i][0]) / 2, my = (pts[i - 1][1] + pts[i][1]) / 2;
@@ -552,38 +603,81 @@
   }
 
   const push = (arr, v) => { arr.push(v); if (arr.length > HIST) arr.shift(); };
+  const statsVisible = () => state.open && state.tab === 'stats';
+
+  function statsFrame(now) {
+    statsRaf = 0;
+    if (!statsVisible()) return;
+    const dt = Math.min(0.1, (now - lastFrame) / 1000 || 0.016);
+    lastFrame = now;
+    const k = 1 - Math.exp(-dt * 6);
+    for (const key of Object.keys(sm)) sm[key] += (tgt[key] - sm[key]) * k;
+    const phase = Math.max(0, Math.min(1, (now - sampleAt) / 1000));
+
+    $('#st-cpu').textContent = Math.round(sm.cpu) + '%';
+    setRing($('#st-cpu-ring'), sm.cpu);
+    drawChart($('#st-spark'), cpuHist, 100, 300, 90, phase);
+    $('#st-ram').textContent = Math.round(sm.ram) + '%';
+    setRing($('#st-ram-ring'), sm.ram);
+    $('#st-down').textContent = fmtRate(sm.down);
+    $('#st-up').textContent = fmtRate(sm.up);
+    drawChart($('#st-net-down'), downHist, Math.max(50e3, ...downHist), 300, 60, phase);
+    drawChart($('#st-net-up'), upHist, Math.max(50e3, ...upHist), 300, 60, phase);
+    statsRaf = requestAnimationFrame(statsFrame);
+  }
+  function startStatsFrames() {
+    if (!statsRaf && statsVisible()) { lastFrame = performance.now(); statsRaf = requestAnimationFrame(statsFrame); }
+  }
 
   function onStats(s) {
     push(cpuHist, s.cpu);
     push(downHist, s.net_down);
     push(upHist, s.net_up);
-    if (!state.open || state.tab !== 'stats') return;
-
     const ramPct = s.mem_total ? (s.mem_used / s.mem_total) * 100 : 0;
-    $('#st-cpu').textContent = Math.round(s.cpu) + '%';
-    setRing($('#st-cpu-ring'), s.cpu);
-    drawChart($('#st-spark'), cpuHist, 100, 300, 90);
+    Object.assign(tgt, { cpu: s.cpu, ram: ramPct, down: s.net_down, up: s.net_up });
+    if (!smReady) { Object.assign(sm, tgt); smReady = true; }
+    sampleAt = performance.now();
+    if (!statsVisible()) return;
 
-    $('#st-ram').textContent = Math.round(ramPct) + '%';
-    setRing($('#st-ram-ring'), ramPct);
     $('#st-ram-sub').innerHTML = `${esc(fmtBytes(s.mem_used))}<br>из ${esc(fmtBytes(s.mem_total))}`;
-
-    $('#st-down').textContent = fmtRate(s.net_down);
-    $('#st-up').textContent = fmtRate(s.net_up);
-    drawChart($('#st-net-down'), downHist, Math.max(50e3, ...downHist), 300, 60);
-    drawChart($('#st-net-up'), upHist, Math.max(50e3, ...upHist), 300, 60);
-
-    $('#st-disks').innerHTML = s.disks.map((d) => {
-      const p = d.total ? (d.used / d.total) * 100 : 0;
-      return `<div class="disk"><div class="top2"><b>${esc(d.name)}</b><span>${fmtBytes(d.used)} из ${fmtBytes(d.total)} · ${p.toFixed(0)}%</span></div><div class="bar"><i class="${level(p)}" style="width:${p.toFixed(0)}%"></i></div></div>`;
-    }).join('') || '<span class="hint">Нет данных</span>';
-
-    const list = (arr, key, fmt) => {
-      const mx = Math.max(1e-9, ...arr.map((p) => p[key]));
-      return arr.map((p) => `<li><span>${esc(p.name)}</span><span>${fmt(p[key])}</span><div class="mb"><i style="width:${((p[key] / mx) * 100).toFixed(0)}%"></i></div></li>`).join('');
+    // списки обновляем на месте (а не пересобираем), чтобы полоски плавно менялись, а не перезапускались
+    const sync = (el, keys, build, update) => {
+      const sig = keys.join('|');
+      if (el.dataset.sig !== sig) {
+        el.innerHTML = build();
+        el.dataset.sig = sig;
+        void el.offsetWidth;
+      }
+      update();
     };
-    $('#st-top-cpu').innerHTML = list(s.top_cpu, 'cpu', (v) => v.toFixed(1) + '%');
-    $('#st-top-mem').innerHTML = list(s.top_mem, 'mem', fmtBytes);
+    const disksEl = $('#st-disks');
+    if (!s.disks.length) { disksEl.innerHTML = '<span class="hint">Нет данных</span>'; disksEl.dataset.sig = ''; }
+    else {
+      sync(disksEl, s.disks.map((d) => d.name),
+        () => s.disks.map((d) => `<div class="disk"><div class="top2"><b>${esc(d.name)}</b><span></span></div><div class="bar"><i></i></div></div>`).join(''),
+        () => s.disks.forEach((d, i) => {
+          const p = d.total ? (d.used / d.total) * 100 : 0;
+          const row = disksEl.children[i];
+          row.querySelector('span').textContent = `${fmtBytes(d.used)} из ${fmtBytes(d.total)} · ${p.toFixed(0)}%`;
+          const bar = row.querySelector('i');
+          bar.style.width = p.toFixed(0) + '%';
+          bar.className = level(p);
+        }));
+    }
+
+    const fillList = (el, arr, key, fmt) => {
+      const mx = Math.max(1e-9, ...arr.map((p) => p[key]));
+      sync(el, arr.map((p) => p.name),
+        () => arr.map((p) => `<li><span>${esc(p.name)}</span><span></span><div class="mb"><i></i></div></li>`).join(''),
+        () => arr.forEach((p, i) => {
+          const li = el.children[i];
+          li.children[1].textContent = fmt(p[key]);
+          li.querySelector('i').style.width = ((p[key] / mx) * 100).toFixed(0) + '%';
+        }));
+    };
+    fillList($('#st-top-cpu'), s.top_cpu, 'cpu', (v) => v.toFixed(1) + '%');
+    fillList($('#st-top-mem'), s.top_mem, 'mem', fmtBytes);
+    startStatsFrames();
   }
 
   $('#top-seg').addEventListener('click', (e) => {
@@ -1081,13 +1175,13 @@
   /* ───────────────────────── старт ───────────────────────── */
 
   renderChat();
-  renderTasks();
+  initNotes();
   renderApps();
   paintNight();
   if (nightOn) applyNight();
   tickClock();
   setInterval(tickClock, 15000);
-  setInterval(() => { if (state.open && state.tab === 'tasks') renderTasks(); }, 30000);
   window.addEventListener('resize', () => { moveIndicator(true); layoutWp(); });
+  applySize();
   poll();
 })();

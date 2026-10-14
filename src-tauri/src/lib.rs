@@ -9,13 +9,28 @@ mod controls;
 mod controls;
 
 use serde::Serialize;
-use std::{fs, path::PathBuf, process::Command, sync::Mutex, time::SystemTime};
-use tauri::{Manager, State};
+use std::{
+    fs,
+    path::PathBuf,
+    process::Command,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    },
+    time::{Duration, SystemTime},
+};
+use tauri::{Emitter, Manager, State};
 use util::quiet;
 
-/// Размер свёрнутой полоски (~0,5 см) — должен совпадать с SIZES.compact в app.js
-const COMPACT_W: f64 = 72.0;
-const COMPACT_H: f64 = 8.0;
+/// Язычок в свёрнутом виде (логические px) — должен совпадать с CSS (#shell clip-path) в style.css
+const PILL_W: f64 = 56.0;
+const PILL_H: f64 = 6.0;
+/// Окно всегда нужного размера (чтобы раскрытие было плавным и без изменения размера окна)
+const START_W: f64 = 940.0;
+const START_H: f64 = 560.0;
+
+/// Раскрыта ли шторка. Пока свёрнута, окно «прозрачно» для мыши, а наведение на язычок ловит поток ниже.
+static OPEN: AtomicBool = AtomicBool::new(false);
 
 /// Выполняет блокирующую работу (COM/WinRT) в отдельном потоке, не задерживая интерфейс
 async fn blocking<T, F>(f: F) -> Result<T, String>
@@ -57,6 +72,41 @@ fn place_window(window: &tauri::WebviewWindow, width: f64, height: f64) -> Resul
         .set_position(tauri::PhysicalPosition::new(x, pos.y))
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[tauri::command]
+fn set_open(window: tauri::WebviewWindow, open: bool) -> Result<(), String> {
+    OPEN.store(open, Ordering::Relaxed);
+    window.set_ignore_cursor_events(!open).map_err(|e| e.to_string())
+}
+
+/// Следит за курсором: пока шторка свёрнута, сообщает интерфейсу, что мышь на язычке
+fn spawn_hover_watcher(app: tauri::AppHandle) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_millis(30));
+        if OPEN.load(Ordering::Relaxed) {
+            continue;
+        }
+        let Some(win) = app.get_webview_window("main") else { continue };
+        let (Ok(cur), Ok(pos), Ok(size), Ok(scale)) = (
+            win.cursor_position(),
+            win.outer_position(),
+            win.outer_size(),
+            win.scale_factor(),
+        ) else {
+            continue;
+        };
+        let half = PILL_W * scale / 2.0 + 4.0;
+        let cx = pos.x as f64 + size.width as f64 / 2.0;
+        let top = pos.y as f64;
+        let inside = cur.x >= cx - half
+            && cur.x <= cx + half
+            && cur.y >= top - 2.0
+            && cur.y <= top + (PILL_H + 3.0) * scale;
+        if inside {
+            let _ = app.emit("pill-hover", ());
+        }
+    });
 }
 
 #[tauri::command]
@@ -294,7 +344,7 @@ fn night_overlay(app: &tauri::AppHandle, strength: f32) -> Result<(), String> {
 
 #[tauri::command]
 async fn set_night(app: tauri::AppHandle, strength: f32) -> Result<(), String> {
-    // сначала пробуем настоящую цветовую гамму; не приняли — накрываем экран тёплой плёнкой
+    // основной путь — цветовой фильтр Windows (Magnification API); если он недоступен — тёплая плёнка поверх экрана
     let gamma = blocking(move || controls::set_night(strength)).await;
     if gamma.is_ok() {
         let _ = night_overlay(&app, 0.0);
@@ -328,6 +378,7 @@ pub fn run() {
         .manage(Mutex::new(stats::SysState::new()))
         .invoke_handler(tauri::generate_handler![
             resize_shutter,
+            set_open,
             get_stats,
             list_wallpapers,
             list_bundled_wallpapers,
@@ -348,9 +399,11 @@ pub fn run() {
         ])
         .setup(|app| {
             if let Some(win) = app.get_webview_window("main") {
-                let _ = place_window(&win, COMPACT_W, COMPACT_H);
+                let _ = place_window(&win, START_W, START_H);
+                let _ = win.set_ignore_cursor_events(true);
                 let _ = win.show();
             }
+            spawn_hover_watcher(app.handle().clone());
             Ok(())
         })
         .build(tauri::generate_context!())

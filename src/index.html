@@ -34,7 +34,7 @@
         <i id="tab-ind"></i>
         <button data-tab="control" class="on">Управление</button>
         <button data-tab="chat">Gemini</button>
-        <button data-tab="tasks">Задачи<i id="tasks-badge" hidden></i></button>
+        <button data-tab="notes">Заметки</button>
         <button data-tab="stats">Нагрузка</button>
         <button data-tab="wallpaper">Обои</button>
         <button data-tab="apps">Приложения</button>
@@ -156,19 +156,28 @@
         </div>
       </section>
 
-      <!-- Задачи -->
-      <section id="tab-tasks" class="tab">
-        <div class="ios-head">
-          <div><h2>Задачи</h2><p id="task-count"></p></div>
-          <button id="task-clear" class="link">Убрать выполненные</button>
+      <!-- Заметки -->
+      <section id="tab-notes" class="tab">
+        <div class="notes">
+          <aside class="n-side">
+            <div class="n-bar">
+              <div class="n-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg><input id="note-search" type="text" placeholder="Поиск" autocomplete="off" spellcheck="false"></div>
+              <button id="note-new" class="n-add" title="Новая заметка"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+            </div>
+            <div id="note-list" class="n-list"></div>
+          </aside>
+          <div id="note-edit" class="n-edit none">
+            <div class="n-meta">
+              <span id="note-date" class="lbl"></span>
+              <span class="spacer"></span>
+              <button id="note-pin" class="n-ic" title="Закрепить сверху"><svg viewBox="0 0 24 24"><path d="M12 17v5"/><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3z"/></svg></button>
+              <button id="note-del" class="n-ic danger" title="Удалить"><svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg></button>
+            </div>
+            <input id="note-title" type="text" placeholder="Заголовок" autocomplete="off" spellcheck="false">
+            <textarea id="note-body" placeholder="Начните писать…" spellcheck="false"></textarea>
+            <div class="n-blank"><svg viewBox="0 0 24 24"><path d="M5 4h10l4 4v12H5z"/><path d="M15 4v4h4M8 12h8M8 16h5"/></svg><b>Заметки</b><span>Нажмите «+», чтобы записать мысль.<br>Всё сохраняется само.</span></div>
+          </div>
         </div>
-        <div class="ios-scroll"><ul id="task-list" class="ios-list"></ul></div>
-        <form id="task-form" class="ios-add">
-          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>
-          <input id="task-text" type="text" placeholder="Новая задача" autocomplete="off">
-          <input id="task-due" type="datetime-local" title="Срок (необязательно)">
-          <button class="go" type="submit" title="Добавить"><svg viewBox="0 0 24 24"><path d="M12 19V5"/><path d="M6 11l6-6 6 6"/></svg></button>
-        </form>
       </section>
 
       <!-- Нагрузка -->
