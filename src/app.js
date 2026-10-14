@@ -247,6 +247,21 @@
     }
   }
 
+  /* ───────────────────────── прокси для Gemini ───────────────────────── */
+
+  function normProxy(raw) {
+    raw = String(raw || '').trim();
+    if (!raw) return '';
+    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) raw = 'http://' + raw;
+    return raw;
+  }
+  function proxyConfig() {
+    if (!store.get('proxyOn', false)) return null;
+    const u = normProxy(store.get('proxyUrl', ''));
+    return u ? { all: u } : null;
+  }
+  const proxyHost = (u) => u.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/^[^@/]*@/, '').replace(/\/.*$/, '');
+
   /* ───────────────────────── чат с Gemini ───────────────────────── */
 
   const DEFAULT_MODEL = 'gemini-flash-latest';
@@ -299,7 +314,9 @@
     try { msg = JSON.parse(bodyText).error.message || ''; } catch { msg = bodyText || ''; }
     const low = msg.toLowerCase();
     if (low.includes('location is not supported') || low.includes('not available in your')) {
-      return 'Gemini API недоступен в вашем регионе. Список стран есть на ai.google.dev (Available regions).';
+      return proxyConfig()
+        ? 'Gemini API недоступен в регионе вашего прокси. Возьмите прокси из страны, где Gemini работает (список на ai.google.dev, Available regions).'
+        : 'Gemini API недоступен в вашем регионе. Подключите HTTP-прокси в «Управлении» (плитка «Прокси для Gemini») или выберите страну из списка на ai.google.dev (Available regions).';
     }
     if (status === 400 && low.includes('api key')) return 'Ключ не принят. Проверьте, что вставили его целиком.';
     if (status === 403) return 'Доступ запрещён (403). Проверьте ключ и включён ли доступ к Gemini API. ' + msg;
@@ -344,6 +361,7 @@
           contents: history,
         }),
         signal: chatAbort.signal,
+        ...(proxyConfig() && T && T.http && T.http.fetch ? { proxy: proxyConfig() } : {}),
       });
       if (!res.ok) throw new Error(parseApiError(res.status, await res.text()));
 
@@ -1040,6 +1058,66 @@
     applyNight();
   });
 
+  /* прокси для Gemini */
+  const proxyEl = $('#proxy-url');
+  proxyEl.value = store.get('proxyUrl', '');
+  function paintProxy() {
+    const on = !!proxyConfig();
+    $('#tg-proxy').classList.toggle('on', on);
+    $('#tg-proxy-s').textContent = on ? 'Включён · ' + proxyHost(normProxy(proxyEl.value)) : 'Выключен';
+  }
+  function proxyNote(text, kind = '') {
+    const n = $('#proxy-note');
+    n.textContent = text;
+    n.className = 'hint ' + kind;
+  }
+  proxyEl.addEventListener('input', () => {
+    store.set('proxyUrl', proxyEl.value.trim());
+    paintProxy();
+  });
+  $('#tg-proxy').addEventListener('click', () => {
+    const want = !store.get('proxyOn', false);
+    const url = normProxy(proxyEl.value);
+    if (want && !url) { toast('Сначала впишите адрес прокси', true); proxyEl.focus(); return; }
+    if (want && !/^https?:\/\//i.test(url)) { toast('Поддерживается HTTP-прокси (http://адрес:порт)', true); return; }
+    store.set('proxyOn', want);
+    store.set('proxyUrl', proxyEl.value.trim());
+    paintProxy();
+    proxyNote(want ? 'Чат с Gemini теперь идёт через прокси.' : 'Прокси выключен, запросы идут напрямую.');
+  });
+  $('#proxy-test').addEventListener('click', async () => {
+    const url = normProxy(proxyEl.value);
+    if (!url) { toast('Сначала впишите адрес прокси', true); return; }
+    const btn = $('#proxy-test');
+    btn.disabled = true;
+    proxyNote('Проверяю соединение…');
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 15000);
+    try {
+      const doFetch = (T && T.http && T.http.fetch) ? T.http.fetch : window.fetch.bind(window);
+      const res = await doFetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=1', {
+        headers: cfg.key ? { 'x-goog-api-key': cfg.key } : {},
+        signal: ctl.signal,
+        proxy: { all: url },
+      });
+      const body = await res.text();
+      if (/location is not supported|not available in your/i.test(body)) {
+        proxyNote('Прокси работает, но Google не принимает его страну. Нужен прокси из другой страны.', 'bad');
+      } else if (res.ok) {
+        proxyNote('Всё работает: Gemini отвечает через прокси.', 'ok');
+      } else if (!cfg.key) {
+        proxyNote('Прокси работает и Google отвечает. Ключ Gemini ещё не вписан, поэтому до конца не проверить.', 'ok');
+      } else {
+        proxyNote(`Прокси работает, но Google ответил ${res.status}. Проверьте ключ.`, 'bad');
+      }
+    } catch (e) {
+      proxyNote(e && e.name === 'AbortError' ? 'Прокси не ответил за 15 секунд.' : 'Не удалось подключиться через прокси: ' + ((e && e.message) || e), 'bad');
+    } finally {
+      clearTimeout(timer);
+      btn.disabled = false;
+    }
+  });
+
   /* плеер (то, что играет в Windows: Spotify, браузер, проигрыватель и т.д.) */
   let mediaKey = '', mediaBusy = false;
   function paintMedia(m) {
@@ -1178,6 +1256,7 @@
   initNotes();
   renderApps();
   paintNight();
+  paintProxy();
   if (nightOn) applyNight();
   tickClock();
   setInterval(tickClock, 15000);

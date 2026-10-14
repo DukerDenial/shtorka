@@ -117,6 +117,20 @@
             <input id="night-range" class="range" type="range" min="10" max="100" value="60" title="Сила">
           </div>
 
+
+          <!-- Прокси для Gemini -->
+          <div class="tile t-proxy">
+            <button class="toggle-inline" id="tg-proxy">
+              <span class="ti"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.8 2.6 4 5.6 4 9s-1.2 6.4-4 9c-2.8-2.6-4-5.6-4-9s1.2-6.4 4-9z"/></svg></span>
+              <span class="tt"><b>Прокси для Gemini</b><small id="tg-proxy-s">Выключен</small></span>
+              <i class="sw"><i class="knob"></i></i>
+            </button>
+            <div class="px-row">
+              <input id="proxy-url" type="text" placeholder="http://адрес:порт  или  логин:пароль@адрес:порт" autocomplete="off" spellcheck="false">
+              <button id="proxy-test" class="ghost">Проверить</button>
+            </div>
+            <div id="proxy-note" class="hint">Нужен, если Gemini пишет «недоступен в вашем регионе». Используется только для чата с Gemini.</div>
+          </div>
         </div>
       </section>
 
