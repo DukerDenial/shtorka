@@ -618,6 +618,43 @@
   });
   $('#chat-site').addEventListener('click', () => safe('open_target', { target: 'https://gemini.google.com/app' }));
   $('#chat-settings').addEventListener('click', () => { if ($('#chat-setup').hidden) openChatSetup(); else $('#chat-setup').hidden = true; });
+  /** Диагностика: что именно мешает — ключ, регион, прокси или сеть */
+  async function probe(useProxy) {
+    const key = $('#key-input').value.trim() || cfg.key;
+    const model = encodeURIComponent(($('#model-input').value.trim() || cfg.model).replace(/^models\//, ''));
+    const px = useProxy ? proxyConfig() : null;
+    const t0 = Date.now();
+    try {
+      const res = await fetchLimited(`${API}${model}`, {
+        method: 'GET', headers: { 'x-goog-api-key': key },
+        ...(px && T && T.http && T.http.fetch ? { proxy: px } : {}),
+      }, WAIT.probe || 12000, new AbortController().signal);
+      const ms = Date.now() - t0;
+      if (res.ok) return { ok: true, text: `Соединение есть (${ms} мс), ключ и модель приняты.` };
+      return { ok: false, reached: true, text: parseApiError(res.status, await res.text()) };
+    } catch (e) {
+      return { ok: false, reached: false, text: e && e.message === 'TIMEOUT' ? 'нет ответа за 12 секунд' : humanizeError(e) };
+    }
+  }
+  $('#key-test').addEventListener('click', async () => {
+    const out = $('#key-test-res');
+    const btn = $('#key-test');
+    if (!($('#key-input').value.trim() || cfg.key)) { out.hidden = false; out.textContent = 'Сначала вставьте ключ.'; return; }
+    btn.disabled = true; out.hidden = false; out.textContent = 'Проверяю…';
+    const viaProxy = !!proxyConfig();
+    const r = await probe(true);
+    let msg = (viaProxy ? 'Через прокси: ' : 'Напрямую: ') + r.text;
+    if (!r.ok && viaProxy) {
+      const d = await probe(false);
+      msg += `\nНапрямую, без прокси: ${d.text}`;
+      if (!r.reached) msg += '\nПрокси не отвечает. Проверьте адрес и порт или отключите его, если у вас включён VPN на весь компьютер.';
+    } else if (!r.ok && !r.reached) {
+      msg += '\nGoogle напрямую недоступен. Включите VPN на компьютере или подключите HTTP-прокси в «Управлении».';
+    }
+    out.textContent = msg;
+    out.style.whiteSpace = 'pre-line';
+    btn.disabled = false;
+  });
   $('#key-get').addEventListener('click', () => safe('open_target', { target: 'https://aistudio.google.com/apikey' }));
   $('#key-cancel').addEventListener('click', () => { $('#chat-setup').hidden = true; });
   $('#key-save').addEventListener('click', () => {
